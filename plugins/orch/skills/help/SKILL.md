@@ -30,8 +30,10 @@ Agenti necommitují — po doběhnutí si změny projdi (`git diff`) a commitni 
 **Přehled a údržba:**
 | příkaz | co dělá |
 |---|---|
-| `/orch:stats [dny]` | tokeny a odhad USD podle agenta a modelu, běhy, verdikty review, soubory, pojistka (výchozí 7 dní) |
-| `/orch:global [dny]` | celý počítač: kolik místa zabírá `~/.claude` (přepisy, pluginy, historie souborů) a tokeny + USD podle projektu, agenta a modelu |
+| `/orch:stats [dny]` | tento projekt: tokeny a odhad USD podle agenta a modelu, **nejdražší tahy**, běhy (s modely), verdikty review, soubory, pojistka (výchozí 7 dní) |
+| `/orch:global [dny]` | celý počítač: kolik místa zabírá `~/.claude` (přepisy, pluginy, historie souborů) a tokeny + USD podle projektu, agenta a modelu, nejdražší tahy přes všechny projekty |
+| `/orch:prune [dny]` | uvolní místo: přepisy sezení nepoužité N dní (výchozí 30, min 7) přesune do `~/.claude/orch-trash` — nejdřív náhled; `/orch:prune --restore-last` vrátí poslední dávku |
+| `/orch:budget` | kolik projekt stál dnes a tento týden proti limitu a jak limit nastavit |
 | `/orch:cleanup` | ukáže dočasné soubory po agentech (`tmp_*`, `debug_*`, `*.bak` …) a po potvrzení je přesune do koše |
 | `/orch:restore [soubor]` | bez argumentu vypíše koš, se souborem ho vrátí zpět |
 | `/orch:notify-test` | pošle zkušební notifikaci na Discord / WhatsApp |
@@ -42,8 +44,9 @@ Agenti necommitují — po doběhnutí si změny projdi (`git diff`) a commitni 
 - Úklid na konci sezení — dočasné soubory, které nejsou v gitu, jdou do `.claude/orch/trash/` (maže se po 7 dnech).
 - Testy po odpovědi — jen když je v `.claude/orch.json` nastaven `testCommand` a máš neuložené změny.
 - Notifikace — po doběhnutí `/orch:*`, dlouhém tahu nebo když Claude čeká na povolení.
+- Rozpočet — když projekt přesáhne denní/týdenní limit v USD, pošle jednu zprávu za den/týden a ukáže varování u dalšího promptu.
 
 **Nastavení:**
-- Notifikace: `/plugin` → `orch` → Configure (Discord webhook URL, WhatsApp číslo + apikey).
-- Projekt: `.claude/orch.json` (`testCommand`, `notify`, `guard`, `trashDays`, `prices`).
+- Notifikace a rozpočet pro všechny projekty: `/plugin` → `orch` → Configure (Discord webhook URL, WhatsApp číslo + apikey, `budget_day_usd`, `budget_week_usd`).
+- Projekt: `.claude/orch.json` (`testCommand`, `notify`, `guard`, `models`, `budget`, `trashDays`, `prices`).
 - `.claude/` patří do `.gitignore`, pokud ho nechceš sdílet s týmem.

@@ -4,6 +4,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
+### Added
+- Most expensive turns (one prompt plus everything it triggered, subagents included) in `/orch:stats` and `/orch:global`.
+- Budget alerts: async `Stop` hook `budget.php` with daily/weekly USD limits (`budget` in `.claude/orch.json` or userConfig `budget_day_usd` / `budget_week_usd`). Sends one notification per period and shows a warning on the next prompt. `/orch:budget` shows the current spend.
+- `/orch:prune [days]`: moves transcripts unused for N days from all projects to `~/.claude/orch-trash` (preview, 7-day trash, `--restore-last`).
+- `/orch:help` covers the new commands.
+
+### Changed
+- The Discord/WhatsApp sender moved to `lib-notify.php`.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added
@@ -37,7 +48,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 - `/orch:stats [days]`: token usage per agent and model, plus file stats.
 - Optional tests on the `Stop` hook (`testCommand` in `.claude/orch.json`).
 
-[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JanCachaDev/claude-orch/releases/tag/v0.1.0

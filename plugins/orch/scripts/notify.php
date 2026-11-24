@@ -19,6 +19,7 @@ declare(strict_types=1);
  * Disable per project with {"notify": false} in .claude/orch.json.
  */
 require __DIR__ . '/lib-usage.php';
+require __DIR__ . '/lib-notify.php';
 
 $opts = getopt('', ['event:', 'project:']);
 $event = (string)($opts['event'] ?? 'stop');
@@ -76,47 +77,3 @@ try {
 } catch (Throwable) {
 }
 exit(0);
-
-
-/** @return array<string,string> channel => "ok" | error */
-function orch_notify_send(string $text): array
-{
-    $results = [];
-
-    $discord = orch_option('discord_webhook_url');
-    if ($discord !== null) {
-        $body = json_encode(['username' => 'orch', 'content' => substr($text, 0, 1900)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        [$code, $out] = orch_curl([
-            ['fail', null],
-            ['url', $discord],
-            ['header', 'Content-Type: application/json'],
-            ['data-binary', (string)$body],
-        ]);
-        $results['discord'] = $code === 0 ? 'ok' : "error $code: " . trim(substr($out, 0, 200));
-    }
-
-    $phone = orch_option('whatsapp_phone');
-    $key = orch_option('whatsapp_apikey');
-    if ($phone !== null && $key !== null) {
-        $provider = strtolower((string)orch_option('whatsapp_provider', 'callmebot'));
-        if ($provider === 'twilio') {
-            $sid = explode(':', $key, 2)[0];
-            $from = (string)orch_option('whatsapp_from', '');
-            [$code, $out] = orch_curl([
-                ['fail', null],
-                ['url', "https://api.twilio.com/2010-04-01/Accounts/" . rawurlencode($sid) . "/Messages.json"],
-                ['user', $key],
-                ['data-urlencode', 'From=whatsapp:' . $from],
-                ['data-urlencode', 'To=whatsapp:' . $phone],
-                ['data-urlencode', 'Body=' . substr($text, 0, 1500)],
-            ]);
-        } else {
-            $url = 'https://api.callmebot.com/whatsapp.php?phone=' . rawurlencode($phone)
-                 . '&text=' . rawurlencode(substr($text, 0, 1000)) . '&apikey=' . rawurlencode($key);
-            [$code, $out] = orch_curl([['fail', null], ['url', $url]]);
-        }
-        $results['whatsapp'] = $code === 0 ? 'ok' : "error $code: " . trim(substr($out, 0, 200));
-    }
-
-    return $results;
-}

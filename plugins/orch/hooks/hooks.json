@@ -1,5 +1,5 @@
 {
-  "description": "orch: guard, file tracking, cleanup, optional tests, Discord/WhatsApp notifications",
+  "description": "orch: guard, file tracking, cleanup, optional tests, Discord/WhatsApp notifications, budget alerts",
   "hooks": {
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.php\"" } ] }
@@ -29,7 +29,8 @@
       {
         "hooks": [
           { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-tests.php\"", "timeout": 600 },
-          { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.php\" --event=stop", "async": true }
+          { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.php\" --event=stop", "async": true },
+          { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/budget.php\"", "async": true }
         ]
       }
     ],

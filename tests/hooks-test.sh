@@ -153,5 +153,41 @@ GOUT="$(CLAUDE_CONFIG_DIR="$T/home" php -n "$S/global.php")"
 check "global shows project path"   'grep -q "C:/x/proj" <<<"$GOUT"'
 check "global counts tokens"        'grep -q "claude-opus-5-5" <<<"$GOUT"'
 check "global --json valid"         'CLAUDE_CONFIG_DIR="$T/home" php -n "$S/global.php" --json | php -n -r "exit(isset(json_decode(stream_get_contents(STDIN), true)[\"projects\"]) ? 0 : 1);"'
+php -n -r 'echo json_encode(["type" => "user", "promptId" => "pr1", "sessionId" => "s1", "message" => ["content" => "hello expensive prompt"]]), "\n";' >> "$T/home/projects/p1/s1.jsonl"
+php -n -r 'echo json_encode(["type" => "assistant", "sessionId" => "s1", "timestamp" => gmdate("c"), "message" => ["id" => "m2", "model" => "claude-opus-5-5", "usage" => ["input_tokens" => 100000, "output_tokens" => 9000]]]), "\n";' >> "$T/home/projects/p1/s1.jsonl"
+GOUT="$(CLAUDE_CONFIG_DIR="$T/home" php -n "$S/global.php")"
+check "global top turns + prompt"   'grep -q "hello expensive prompt" <<<"$GOUT"'
+
+echo "== budget"
+BP="$T/bp"; mkdir -p "$BP/.claude"
+SLUG="$(php -n -r 'echo preg_replace("/[^A-Za-z0-9]/", "-", $argv[1]);' "$BP")"
+mkdir -p "$T/home/projects/$SLUG"
+php -n -r 'echo json_encode(["sessionId" => "b1", "timestamp" => gmdate("c"), "message" => ["id" => "b1", "model" => "claude-opus-5-5", "usage" => ["input_tokens" => 1000000, "output_tokens" => 0]]]), "\n";' > "$T/home/projects/$SLUG/b1.jsonl"
+echo '{"budget":{"day":1}}' > "$BP/.claude/orch.json"
+: > "$ORCH_NOTIFY_OUTBOX"
+CLAUDE_CONFIG_DIR="$T/home" php -n "$S/budget.php" --project="$BP"
+check "budget alert file"           'grep -q "rozpočet překročen" "$BP/.claude/orch/budget-alert.txt"'
+check "budget alert notified"       'grep -q "rozpo" "$ORCH_NOTIFY_OUTBOX"'
+rm -f "$BP/.claude/orch/budget-alert.txt"; : > "$ORCH_NOTIFY_OUTBOX"
+CLAUDE_CONFIG_DIR="$T/home" php -n "$S/budget.php" --project="$BP" --now=$(( $(date +%s) + 400 ))
+check "budget alerts once per day"  '[ ! -f "$BP/.claude/orch/budget-alert.txt" ] && [ ! -s "$ORCH_NOTIFY_OUTBOX" ]'
+echo x > "$BP/.claude/orch/budget-alert.txt"
+TS="$(cd "$BP" && echo '{"session_id":"b1"}' | CLAUDE_PROJECT_DIR="$BP" php -n "$S/turn-start.php")"
+check "turn-start shows alert"      'grep -q systemMessage <<<"$TS" && [ ! -f "$BP/.claude/orch/budget-alert.txt" ]'
+check "budget --status"             'CLAUDE_CONFIG_DIR="$T/home" php -n "$S/budget.php" --project="$BP" --status | grep -q "limit 1.00"'
+
+echo "== prune"
+mkdir -p "$T/home/projects/p2/old1/subagents" "$T/home/file-history/old1"
+echo '{}' > "$T/home/projects/p2/old1.jsonl"; echo '{}' > "$T/home/projects/p2/old1/subagents/agent-a.jsonl"
+echo '{}' > "$T/home/projects/p2/new1.jsonl"; echo h > "$T/home/file-history/old1/f"
+touch -d "40 days ago" "$T/home/projects/p2/old1.jsonl" "$T/home/projects/p2/old1/subagents/agent-a.jsonl" "$T/home/projects/p2/old1/subagents" "$T/home/projects/p2/old1"
+POUT="$(CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --days=30 --dry-run)"
+check "prune preview lists old"     'grep -q "p2 .* 1 sezení" <<<"$POUT" && [ -f "$T/home/projects/p2/old1.jsonl" ]'
+CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --days=30 >/dev/null
+check "prune moved old session"     '[ ! -e "$T/home/projects/p2/old1.jsonl" ] && [ ! -e "$T/home/projects/p2/old1" ] && [ ! -e "$T/home/file-history/old1" ]'
+check "prune kept recent session"   '[ -f "$T/home/projects/p2/new1.jsonl" ]'
+CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --restore-last >/dev/null
+check "prune --restore-last"        '[ -f "$T/home/projects/p2/old1.jsonl" ] && [ -f "$T/home/projects/p2/old1/subagents/agent-a.jsonl" ] && [ -f "$T/home/file-history/old1/f" ]'
+
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

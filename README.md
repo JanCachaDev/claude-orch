@@ -12,8 +12,10 @@ A token-efficient agent orchestration plugin for [Claude Code](https://code.clau
 | `/orch:bugfix <bug>` | reproduce → root cause → minimal fix + regression test → review (no planner) |
 | `/orch:backend <task>` | planner → worker → reviewer **and** DB optimizer in parallel (N+1 queries, indexes, caching) |
 | `/orch:parallel <task>` | the planner splits the task into 2–4 independent parts, workers run at the same time in separate git worktrees, then their patches are applied and reviewed |
-| `/orch:stats [days]` | tokens and **estimated USD** per agent and model, past runs, review stats, files, cleanup, guard (`stats.php --json` for machine-readable output) |
-| `/orch:global [days]` | machine-wide: disk used by `~/.claude` (transcripts, plugins, file history) and tokens + USD per project, agent and model across all sessions |
+| `/orch:stats [days]` | tokens and **estimated USD** per agent and model, the **most expensive turns**, past runs (with models used), review stats, files, cleanup, guard (`stats.php --json` for machine-readable output) |
+| `/orch:global [days]` | machine-wide: disk used by `~/.claude` (transcripts, plugins, file history) and tokens + USD per project, agent and model, and the most expensive turns across all sessions |
+| `/orch:prune [days]` | frees disk space: moves session transcripts unused for N days (default 30, min 7) from all projects to `~/.claude/orch-trash`, with a preview; `--restore-last` undoes the last batch |
+| `/orch:budget` | this project's estimated spend today and this week against your limits |
 | `/orch:init` | sets up the project: `.claude/orch.json` with a detected test command, plus deny rules for vendor/, node_modules/ and lock files |
 | `/orch:cleanup` | manual temp-file cleanup with a preview |
 | `/orch:restore [file]` | restores a file from the orch trash |
@@ -25,6 +27,7 @@ These run automatically as hooks, which cost zero tokens:
 - **Guard** (`PreToolUse`): blocks commands such as `rm -rf /`, `git push --force`, `git reset --hard`, `git clean -f`, `DROP TABLE`, `DELETE` without `WHERE`, and `curl … | sh`.
 - **File tracking** (`PostToolUse`) and **temp cleanup** (`SessionEnd`), with a 7-day trash.
 - **Tests on Stop** (opt-in): when tests fail, Claude gets only the last 30 lines of output.
+- **Budget alerts** (async, `Stop`): when a project crosses its daily or weekly USD limit, you get one Discord/WhatsApp message per period and a warning on your next prompt. Set limits for all projects in `/plugin` → `orch` → Configure (`budget_day_usd`, `budget_week_usd`) or per project with `"budget": {"day": 10, "week": 50}`.
 - **Notifications** (async): Discord and/or WhatsApp when a `/orch:*` run finishes, when a long turn ends, or when Claude is waiting for your permission.
 
 ## Requirements
@@ -120,6 +123,7 @@ The built-in rules are in [`guard.php`](plugins/orch/scripts/guard.php). When th
   "testTailLines": 30,
   "notify": true,
   "models": { "planner": "sonnet" },
+  "budget": { "day": 10, "week": 50 },
   "guard": { "enabled": true, "block": [], "allow": [] },
   "prices": { "claude-opus-5-5": [4.0, 20.0, 0.20] }
 }

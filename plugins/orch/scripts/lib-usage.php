@@ -61,7 +61,20 @@ function orch_usage_messages_dir(string $dir, int $since = 0): array
         if (!$fh) {
             continue;
         }
+        $turn = '';
         while (($line = fgets($fh)) !== false) {
+            // user lines carry the promptId of the turn they belong to (subagents: the parent turn)
+            if (str_contains($line, '"type":"user"') && preg_match('/"promptId":"([^"]+)"/', $line, $pm)) {
+                $turn = $pm[1];
+                if ($agent === 'main' && !isset($GLOBALS['orch_prompts'][$turn]) && !str_contains($line, '"isMeta":true')
+                    && !str_contains($line, '"tool_result"')) {
+                    $text = orch_prompt_text(json_decode($line, true)['message']['content'] ?? '');
+                    if ($text !== '') {
+                        $GLOBALS['orch_prompts'][$turn] = $text;
+                    }
+                }
+                continue;
+            }
             if (!str_contains($line, '"usage"')) {
                 continue;
             }
@@ -82,6 +95,7 @@ function orch_usage_messages_dir(string $dir, int $since = 0): array
                 'ts'      => $ts,
                 'session' => (string)($j['sessionId'] ?? '?'),
                 'agent'   => $agent,
+                'turn'    => $turn,
                 'model'   => (string)($m['model'] ?? '?'),
                 'u'       => [
                     'in'    => (int)($u['input_tokens'] ?? 0),
@@ -118,6 +132,49 @@ function orch_usage_sum(array $rows, array $prices = [], ?callable $filter = nul
 function orch_fmt_tokens(int $n): string
 {
     return $n >= 1_000_000 ? sprintf('%.1fM', $n / 1e6) : ($n >= 1000 ? sprintf('%.1fk', $n / 1e3) : (string)$n);
+}
+
+/** Short one-line version of a user prompt ("/orch:run …" for slash commands). */
+function orch_prompt_text($content): string
+{
+    if (is_array($content)) {
+        $content = implode(' ', array_map(fn($c) => is_array($c) && ($c['type'] ?? '') === 'text' ? (string)$c['text'] : '', $content));
+    }
+    $s = (string)$content;
+    if (preg_match('~<command-name>([^<]*)</command-name>~', $s, $m)) {
+        $args = preg_match('~<command-args>([^<]*)</command-args>~', $s, $a) ? ' ' . $a[1] : '';
+        $s = $m[1] . $args;
+    }
+    $s = preg_replace('~<(system-reminder|local-command-[a-z]+)>.*?</\1>~s', '', $s) ?? $s;
+    $s = trim(preg_replace('/\s+/u', ' ', strip_tags($s)) ?? '');
+    return strlen($s) > 200 ? substr($s, 0, 200) : $s;
+}
+
+/**
+ * Most expensive turns (one user prompt and everything it triggered, subagents included).
+ * @return list<array{session:string, turn:string, prompt:string, from:int, to:int, project?:string}&array>
+ */
+function orch_top_turns(array $rows, array $prices = [], int $n = 5): array
+{
+    $g = [];
+    foreach ($rows as $r) {
+        if ($r['turn'] === '') {
+            continue;
+        }
+        $g[$r['session'] . '|' . $r['turn']][] = $r;
+    }
+    $turns = [];
+    foreach ($g as $key => $list) {
+        [$session, $turn] = explode('|', $key, 2);
+        $ts = array_column($list, 'ts');
+        $turns[] = orch_usage_sum($list, $prices) + [
+            'session' => $session, 'turn' => $turn, 'prompt' => (string)($GLOBALS['orch_prompts'][$turn] ?? '?'),
+            'from' => min($ts), 'to' => max($ts), 'project' => (string)($list[0]['project'] ?? ''),
+            'agents' => count(array_unique(array_column($list, 'agent'))),
+        ];
+    }
+    usort($turns, fn($a, $b) => $b['usd'] <=> $a['usd']);
+    return array_slice($turns, 0, $n);
 }
 
 /** Recursive size in bytes and file count; never throws. */

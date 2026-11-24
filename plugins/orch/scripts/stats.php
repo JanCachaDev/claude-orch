@@ -13,7 +13,7 @@ require __DIR__ . '/lib-usage.php';
 
 $opts = getopt('', ['days:', 'project:', 'json']);
 $asJson = isset($opts['json']);
-$out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null,
+$out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null, 'top_turns' => [],
     'runs' => [], 'files' => [], 'cleanup' => [], 'guard' => [], 'notify' => []];
 if ($asJson) {
     ob_start();
@@ -49,6 +49,15 @@ if (!$rows) {
             print_row((string)$name, $s);
         }
         print_row('CELKEM', orch_usage_sum($rows, $cfg['prices']));
+    }
+    $top = orch_top_turns($rows, $cfg['prices'], 5);
+    $out['top_turns'] = $top;
+    if ($top) {
+        echo "\nNejdražší tahy:\n";
+        foreach ($top as $t) {
+            printf("  %7.2f USD %6d calls %8s  %s  %s\n", $t['usd'], $t['calls'], orch_fmt_duration($t['to'] - $t['from']),
+                date('m-d H:i', $t['from']), cut($t['prompt'], 60));
+        }
     }
 }
 

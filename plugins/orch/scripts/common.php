@@ -23,6 +23,8 @@ const ORCH_DEFAULTS = [
     'guard'         => ['enabled' => true, 'block' => [], 'allow' => []],
     // notifications (Discord / WhatsApp credentials live in plugin userConfig, not here)
     'notify'        => true,
+    // USD limits for this project per day / ISO week; null = off (or plugin userConfig budget_*_usd)
+    'budget'        => ['day' => null, 'week' => null],
     // USD per 1M tokens overrides: {"model-prefix": [input, output, cacheRead]}
     'prices'        => [],
 ];

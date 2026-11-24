@@ -58,9 +58,11 @@ uasort($projects, fn($a, $b) => $b['bytes'] <=> $a['bytes']);
 $byAgent = group_sum($allRows, 'agent');
 $byModel = group_sum($allRows, 'model');
 $totals = orch_usage_sum($allRows);
+$topTurns = orch_top_turns($allRows, [], 5);
 
 if (isset($opts['json'])) {
     echo json_encode([
+        'top_turns' => $topTurns,
         'days' => $days, 'home' => $home, 'disk_total' => $total, 'disk' => (object)$disk,
         'projects' => (object)$projects, 'agents' => (object)$byAgent, 'models' => (object)$byModel, 'totals' => $totals,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
@@ -93,6 +95,11 @@ if ($allRows) {
             printf("%-26s %6d %9s %8s %8.2f\n", cut((string)$name, 26), $s['calls'], orch_fmt_tokens(tok($s)), orch_fmt_tokens($s['out']), $s['usd']);
         }
         printf("%-26s %6d %9s %8s %8.2f\n", 'CELKEM', $totals['calls'], orch_fmt_tokens(tok($totals)), orch_fmt_tokens($totals['out']), $totals['usd']);
+    }
+    echo "\nNejdražší tahy ($days dní):\n";
+    foreach ($topTurns as $t) {
+        printf("  %7.2f USD %6d calls %8s  %s  %s  %s\n", $t['usd'], $t['calls'], orch_fmt_duration($t['to'] - $t['from']),
+            date('m-d H:i', $t['from']), pad(cut(basename($t['project']), 18), 18), cut_end($t['prompt'], 50));
     }
 } else {
     echo "\nZa posledních $days dní žádné tokeny.\n";
@@ -142,6 +149,11 @@ function cut(string $s, int $n): string
 {
     // php -n has no mbstring; keep the tail (the project name) and cut on UTF-8 boundaries
     return strlen($s) <= $n ? $s : '…' . (preg_match('/.{0,' . ($n - 1) . '}$/us', $s, $m) ? $m[0] : substr($s, -($n - 1)));
+}
+
+function cut_end(string $s, int $n): string
+{
+    return strlen($s) <= $n ? $s : (preg_match('/^.{0,' . ($n - 1) . '}/us', $s, $m) ? $m[0] : substr($s, 0, $n - 1)) . '…';
 }
 
 function pad(string $s, int $n): string
