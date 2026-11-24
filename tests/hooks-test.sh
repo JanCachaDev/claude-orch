@@ -141,6 +141,9 @@ OUT="$(php -n "$S/stats.php" --project="$T")"
 check "stats counts writes"         'grep -q "worker 3" <<<"$OUT"'
 check "stats shows runs"            'grep -q "Add feature X" <<<"$OUT"'
 check "stats shows guard"           'grep -q "Pojistka zablokovala" <<<"$OUT"'
+JOUT="$(php -n "$S/stats.php" --project="$T" --json)"
+check "stats --json valid"          'php -n -r '"'"'exit(is_array(json_decode(stream_get_contents(STDIN), true)) ? 0 : 1);'"'"' <<<"$JOUT"'
+check "stats --json runs+files"     'php -n -r '"'"'$d = json_decode(stream_get_contents(STDIN), true); exit(isset($d["runs"], $d["files"]) ? 0 : 1);'"'"' <<<"$JOUT"'
 
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

@@ -4,14 +4,20 @@ declare(strict_types=1);
  * Compact report for one project:
  *   tokens + estimated USD per agent and model, orchestration runs, review stats,
  *   files written/cleaned by agents, guard blocks, notifications.
- * Usage: php -n stats.php [--days=7] [--project=<dir>]
+ * Usage: php -n stats.php [--days=7] [--project=<dir>] [--json]
  *
  * USD is an API-price estimate (see ORCH_PRICES in common.php). On a Pro/Max subscription
  * you don't pay per token; treat it as a relative cost measure.
  */
 require __DIR__ . '/lib-usage.php';
 
-$opts = getopt('', ['days:', 'project:']);
+$opts = getopt('', ['days:', 'project:', 'json']);
+$asJson = isset($opts['json']);
+$out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null,
+    'runs' => [], 'files' => [], 'cleanup' => [], 'guard' => [], 'notify' => []];
+if ($asJson) {
+    ob_start();
+}
 $days = max(1, (int)($opts['days'] ?? 7));
 $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_project_dir();
 $since = time() - $days * 86400;
@@ -27,6 +33,8 @@ if (!$rows) {
     echo "\nŽádné přepisy sezení" . (orch_transcript_dir($project) ? '' : ' (adresář nenalezen)') . ".\n";
 } else {
     $sessions = count(array_unique(array_column($rows, 'session')));
+    $out['sessions'] = $sessions;
+    $out['totals'] = orch_usage_sum($rows, $cfg['prices']);
     echo "Sezení: $sessions\n";
     foreach (['agent' => 'Podle agenta', 'model' => 'Podle modelu'] as $key => $title) {
         $groups = [];
@@ -35,6 +43,7 @@ if (!$rows) {
         }
         $sums = array_map(fn($g) => orch_usage_sum($g, $cfg['prices']), $groups);
         uasort($sums, fn($a, $b) => $b['usd'] <=> $a['usd']);
+        $out[$key === 'agent' ? 'agents' : 'models'] = $sums;
         printf("\n%-26s %6s %8s %9s %9s %8s %8s\n", $title, 'calls', 'input', 'cache_wr', 'cache_rd', 'output', 'USD');
         foreach ($sums as $name => $s) {
             print_row((string)$name, $s);
@@ -45,6 +54,7 @@ if (!$rows) {
 
 // --- runs ---
 $runs = array_values(array_filter(orch_read_jsonl("$state/runs.log"), fn($r) => ($r['event'] ?? '') === 'end' && ($r['epoch'] ?? 0) >= $since));
+$out['runs'] = $runs;
 if ($runs) {
     echo "\nBěhy orchestrace (" . count($runs) . "):\n";
     printf("  %-8s %-34s %-17s %6s %8s %7s\n", 'mód', 'úkol', 'verdikt', 'kola', 'čas', 'USD');
@@ -93,6 +103,9 @@ foreach (orch_read_jsonl("$state/cleanup.log") as $r) {
     }
 }
 arsort($written);
+$trashDirs = count(glob("$state/trash/*", GLOB_ONLYDIR) ?: []);
+$out['files'] = ['writes' => array_sum($written), 'temporary' => $tmpWritten, 'by_agent' => $written];
+$out['cleanup'] = ['moved' => $moved, 'bytes' => $movedBytes, 'restored' => $restored, 'trash_dirs' => $trashDirs];
 echo "\nSoubory (Write): " . array_sum($written) . " zápisů, dočasných $tmpWritten"
     . ($written ? ' — ' . implode(', ', array_map(fn($k, $v) => "$k $v", array_keys($written), $written)) : '') . "\n";
 printf("Úklid: %d souborů do koše (%s B), obnoveno %d, košů na disku %d\n",
@@ -100,15 +113,29 @@ printf("Úklid: %d souborů do koše (%s B), obnoveno %d, košů na disku %d\n",
 
 // --- guard / notify ---
 $blocks = array_filter(orch_read_jsonl("$state/guard.log"), fn($r) => strtotime((string)$r['ts']) >= $since);
+$why = $blocks ? array_count_values(array_column($blocks, 'reason')) : [];
+arsort($why);
+$out['guard'] = ['blocked' => count($blocks), 'by_reason' => $why];
 if ($blocks) {
-    $why = array_count_values(array_column($blocks, 'reason'));
-    arsort($why);
     echo 'Pojistka zablokovala: ' . count($blocks) . ' — ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($why), $why)) . "\n";
 }
 $notes = array_filter(orch_read_jsonl("$state/notify.log"), fn($r) => strtotime((string)$r['ts']) >= $since);
+$fail = count(array_filter($notes, fn($r) => in_array(true, array_map(fn($v) => $v !== 'ok', $r['results'] ?? []), true)));
+$out['notify'] = ['sent' => count($notes), 'failed' => $fail];
 if ($notes) {
-    $fail = count(array_filter($notes, fn($r) => in_array(true, array_map(fn($v) => $v !== 'ok', $r['results'] ?? []), true)));
     echo 'Notifikace: ' . count($notes) . " odesláno" . ($fail ? ", $fail s chybou (viz .claude/orch/notify.log)" : '') . "\n";
+}
+
+if ($asJson) {
+    ob_end_clean();
+    $out['days'] = $days;
+    $out['project'] = basename($project);
+    // keep maps as JSON objects even when empty
+    $out['agents'] = (object)$out['agents'];
+    $out['models'] = (object)$out['models'];
+    $out['files']['by_agent'] = (object)$out['files']['by_agent'];
+    $out['guard']['by_reason'] = (object)$out['guard']['by_reason'];
+    echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
 }
 
 function print_row(string $name, array $s): void

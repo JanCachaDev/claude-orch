@@ -60,7 +60,8 @@ switch ($cmd) {
             fn($r) => ($sess === '' || $r['session'] === $sess) && $r['ts'] >= $from && $r['ts'] <= $now + 5);
         $verdict = strtoupper((string)($opts['verdict'] ?? 'UNKNOWN'));
         $rounds = (int)($opts['rounds'] ?? 0);
-        $cats = array_values(array_filter(array_map('trim', explode(',', strtolower((string)($opts['categories'] ?? ''))))));
+        $cats = array_values(array_unique(array_filter(array_map('trim', explode(',', strtolower((string)($opts['categories'] ?? '')))),
+            fn($c) => $c !== '' && $c !== 'none')));
         $entry = [
             'id' => $id, 'event' => 'end', 'ts' => date('c'), 'epoch' => $now,
             'session' => $sess ?: null, 'mode' => $start['mode'], 'task' => $start['task'],

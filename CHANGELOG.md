@@ -4,6 +4,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+### Added
+- `/orch:help [command]`: overview of all commands with examples.
+- `/orch:bugfix`, `/orch:backend` (with `orch:db-optimizer`) and `/orch:parallel` (git worktrees).
+- Guard hook against destructive commands, configurable via `guard.block` / `guard.allow`.
+- Discord / WhatsApp notifications (CallMeBot or Twilio), `/orch:notify-test`.
+- Run journal `.claude/orch/runs.log`; `/orch:stats` shows estimated USD, runs and review stats.
+- `stats.php --json` for machine-readable output.
+- `/orch:init` and `/orch:restore`.
+
+### Fixed
+- Run cost is counted from the start of the user turn.
+- `--categories=none` is no longer logged as a review finding category.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added
