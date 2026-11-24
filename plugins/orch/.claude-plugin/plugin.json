@@ -1,10 +1,55 @@
 {
   "name": "orch",
-  "version": "0.1.0",
-  "description": "Token-efficient agent orchestration (planner → worker → reviewer), temp file tracking & cleanup, token stats.",
+  "version": "0.2.0",
+  "description": "Token-efficient agent orchestration (planner → worker → reviewer, bugfix, backend, parallel worktrees), guard against destructive commands, temp file cleanup, token & cost stats, Discord/WhatsApp notifications.",
   "author": { "name": "JanCachaDev", "url": "https://github.com/JanCachaDev" },
   "homepage": "https://github.com/JanCachaDev/claude-orch",
   "repository": "https://github.com/JanCachaDev/claude-orch",
   "license": "MIT",
-  "keywords": ["agents", "orchestration", "tokens", "cleanup", "hooks"]
+  "keywords": ["agents", "orchestration", "tokens", "cleanup", "hooks", "notifications", "discord", "whatsapp"],
+  "userConfig": {
+    "discord_webhook_url": {
+      "type": "string",
+      "title": "Discord webhook URL",
+      "description": "Server Settings → Integrations → Webhooks → New Webhook → Copy URL. Empty = Discord off.",
+      "sensitive": true,
+      "required": false
+    },
+    "whatsapp_provider": {
+      "type": "string",
+      "title": "WhatsApp provider",
+      "description": "callmebot (free, personal use) or twilio.",
+      "options": ["callmebot", "twilio"],
+      "default": "callmebot",
+      "required": false
+    },
+    "whatsapp_phone": {
+      "type": "string",
+      "title": "WhatsApp phone number",
+      "description": "Your number in international format, e.g. +420123456789. Empty = WhatsApp off.",
+      "sensitive": true,
+      "required": false
+    },
+    "whatsapp_apikey": {
+      "type": "string",
+      "title": "WhatsApp API key",
+      "description": "CallMeBot apikey, or for Twilio ACCOUNT_SID:AUTH_TOKEN.",
+      "sensitive": true,
+      "required": false
+    },
+    "whatsapp_from": {
+      "type": "string",
+      "title": "Twilio WhatsApp sender",
+      "description": "Only for Twilio: sender number, e.g. +14155238886 (sandbox).",
+      "required": false
+    },
+    "notify_min_seconds": {
+      "type": "number",
+      "title": "Notify when a turn takes at least (s)",
+      "description": "A 'Claude finished' message is sent only for turns at least this long.",
+      "default": 60,
+      "min": 0,
+      "required": false
+    }
+  }
 }

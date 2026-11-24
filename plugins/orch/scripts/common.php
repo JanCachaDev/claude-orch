@@ -19,7 +19,103 @@ const ORCH_DEFAULTS = [
     // shell command run on Stop when the working tree changed; null = disabled
     'testCommand'   => null,
     'testTailLines' => 30,
+    // PreToolUse guard against destructive shell commands
+    'guard'         => ['enabled' => true, 'block' => [], 'allow' => []],
+    // notifications (Discord / WhatsApp credentials live in plugin userConfig, not here)
+    'notify'        => true,
+    // USD per 1M tokens overrides: {"model-prefix": [input, output, cacheRead]}
+    'prices'        => [],
 ];
+
+/**
+ * USD per 1M tokens: [input, output, cache read]. Cache writes are billed at 1.25× (5 min) / 2× (1 h) input.
+ * Matched by longest model-id prefix. Source: Anthropic API price list (2026-11). Override via `prices` in orch.json.
+ */
+const ORCH_PRICES = [
+    'claude-fable-5-2'  => [8.0, 40.0, 0.20],
+    'claude-mythos-5-2' => [8.0, 40.0, 0.20],
+    'claude-fable-5'    => [10.0, 50.0, 1.00],
+    'claude-mythos-5'   => [10.0, 50.0, 1.00],
+    'claude-opus-5-5'   => [4.0, 20.0, 0.20],
+    'claude-opus-5'     => [5.0, 25.0, 0.50],
+    'claude-opus-4'     => [5.0, 25.0, 0.50],
+    'claude-sonnet-5-5' => [2.0, 10.0, 0.10],
+    'claude-sonnet-5'   => [2.0, 10.0, 0.20],
+    'claude-sonnet-4'   => [3.0, 15.0, 0.30],
+    'claude-haiku-5-5'  => [0.10, 0.50, 0.01],
+    'claude-haiku-4'    => [1.0, 5.0, 0.10],
+];
+
+/** @return array{0:float,1:float,2:float}|null */
+function orch_price(string $model, array $overrides = []): ?array
+{
+    $table = array_merge(ORCH_PRICES, $overrides);
+    $best = null;
+    $bestLen = 0;
+    foreach ($table as $prefix => $p) {
+        if (str_starts_with($model, (string)$prefix) && strlen((string)$prefix) > $bestLen) {
+            $best = array_map('floatval', array_values($p));
+            $bestLen = strlen((string)$prefix);
+        }
+    }
+    return $best;
+}
+
+/** Usage row (in, cw5, cw1h, cread, out) → USD, or null when the model has no price. */
+function orch_cost(string $model, array $u, array $overrides = []): ?float
+{
+    $p = orch_price($model, $overrides);
+    if ($p === null) {
+        return null;
+    }
+    [$in, $out, $read] = $p;
+    return (($u['in'] ?? 0) * $in
+          + ($u['cw5'] ?? 0) * $in * 1.25
+          + ($u['cw1h'] ?? 0) * $in * 2.0
+          + ($u['cread'] ?? 0) * $read
+          + ($u['out'] ?? 0) * $out) / 1_000_000;
+}
+
+/** Plugin userConfig value (exported to hooks as CLAUDE_PLUGIN_OPTION_<KEY>). */
+function orch_option(string $key, ?string $default = null): ?string
+{
+    $v = getenv('CLAUDE_PLUGIN_OPTION_' . strtoupper($key));
+    return ($v === false || $v === '') ? $default : $v;
+}
+
+/** Quote a value for a curl config file ("..." with \" and \\ escapes). */
+function orch_curl_quote(string $v): string
+{
+    return '"' . strtr($v, ['\\' => '\\\\', '"' => '\\"', "\n" => '\\n', "\r" => '\\r', "\t" => '\\t']) . '"';
+}
+
+/**
+ * Runs curl with options passed via stdin (`--config -`) so secrets never appear in the process list.
+ * @param array<int, array{0:string,1:?string}> $options list of [option, value|null]
+ * @return array{0:int,1:string} [exit code, output]
+ */
+function orch_curl(array $options, int $timeout = 8): array
+{
+    $cfg = "silent\nshow-error\nmax-time = $timeout\n";
+    foreach ($options as [$opt, $val]) {
+        $cfg .= $val === null ? "$opt\n" : "$opt = " . orch_curl_quote($val) . "\n";
+    }
+    $outbox = getenv('ORCH_NOTIFY_OUTBOX'); // test mode: write config instead of sending
+    if ($outbox) {
+        @file_put_contents($outbox, $cfg . "---\n", FILE_APPEND);
+        return [0, ''];
+    }
+    $proc = @proc_open(['curl', '--config', '-'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    if (!is_resource($proc)) {
+        return [127, 'curl not found'];
+    }
+    fwrite($pipes[0], $cfg);
+    fclose($pipes[0]);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($proc), (string)$out];
+}
 
 function orch_read_input(): array
 {
@@ -59,6 +155,7 @@ function orch_config(string $project): array
         $user = json_decode((string)file_get_contents($file), true);
         if (is_array($user)) {
             $cfg = array_merge($cfg, $user);
+            $cfg['guard'] = array_merge(ORCH_DEFAULTS['guard'], is_array($user['guard'] ?? null) ? $user['guard'] : []);
         }
     }
     return $cfg;

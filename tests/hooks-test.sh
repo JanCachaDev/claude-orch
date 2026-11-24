@@ -66,9 +66,81 @@ rm .claude/orch.json
 echo '{}' | php -n "$S/stop-tests.php"; CODE=$?
 check "disabled by default"         '[ $CODE -eq 0 ]'
 
+echo "== restore"
+OUT="$(php -n "$S/restore.php" --list --project="$T")"
+check "list shows trashed file"     'grep -q tmp_notes.md <<<"$OUT"'
+php -n "$S/restore.php" --file=src/debug_query.php --project="$T" >/dev/null
+check "file restored"               '[ -f src/debug_query.php ]'
+php -n "$S/restore.php" --file=src/debug_query.php --project="$T" >/dev/null 2>&1; CODE=$?
+check "second restore fails"        '[ $CODE -ne 0 ]'
+
+echo "== guard"
+guard(){ echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(php -n -r 'echo json_encode($argv[1]);' "$1")}}" | php -n "$S/guard.php"; }
+check "blocks rm -rf /"             'guard "rm -rf /" | grep -q "\"deny\""'
+check "blocks git push --force"     'guard "git push --force origin main" | grep -q deny'
+check "blocks DROP TABLE"           'guard "mysql -e \"DROP TABLE users\"" | grep -q deny'
+check "allows rm -rf build/"        '[ -z "$(guard "rm -rf build/")" ]'
+check "allows --force-with-lease"   '[ -z "$(guard "git push --force-with-lease")" ]'
+check "guard.log written"           'grep -q "force push" .claude/orch/guard.log'
+echo '{"guard":{"allow":["^git push --force origin main$"]}}' > .claude/orch.json
+check "allow rule overrides"        '[ -z "$(guard "git push --force origin main")" ]'
+echo '{"guard":{"block":["\\bnpm\\s+publish\\b"]}}' > .claude/orch.json
+check "custom block rule"           'guard "npm publish" | grep -q deny'
+rm .claude/orch.json
+
+echo "== run-log + notify"
+export ORCH_NOTIFY_OUTBOX="$T/outbox.txt"
+export CLAUDE_PLUGIN_OPTION_DISCORD_WEBHOOK_URL="https://discord.example/webhook/1"
+export CLAUDE_PLUGIN_OPTION_WHATSAPP_PHONE="+420111222333"
+export CLAUDE_PLUGIN_OPTION_WHATSAPP_APIKEY="k3y"
+ID="$(php -n "$S/run-log.php" start --mode=run --session=s1 --project="$T" --task="Add feature X")"
+check "run id printed"              '[ -n "$ID" ]'
+OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --summary="done")"
+check "run end summary"             'grep -q "APPROVED, 1 rounds" <<<"$OUT"'
+check "notification queued"         '[ -f .claude/orch/notify-pending.json ]'
+echo '{"session_id":"s1","last_assistant_message":"hi"}' | php -n "$S/notify.php" --event=stop
+check "pending sent + removed"      '[ ! -f .claude/orch/notify-pending.json ]'
+check "discord payload has task"    'grep -q "Add feature X" "$ORCH_NOTIFY_OUTBOX"'
+check "whatsapp callmebot url"      'grep -q "api.callmebot.com/whatsapp.php?phone=%2B420111222333" "$ORCH_NOTIFY_OUTBOX"'
+check "secret not in notify.log"    '! grep -q k3y .claude/orch/notify.log'
+: > "$ORCH_NOTIFY_OUTBOX"
+echo '{"session_id":"s1"}' | php -n "$S/turn-start.php"
+echo '{"session_id":"s1","last_assistant_message":"quick"}' | php -n "$S/notify.php" --event=stop
+check "short turn → no message"     '[ ! -s "$ORCH_NOTIFY_OUTBOX" ]'
+echo $(( $(date +%s) - 120 )) > .claude/orch/sessions/s1.turn
+echo '{"session_id":"s1","last_assistant_message":"long work done"}' | php -n "$S/notify.php" --event=stop
+check "long turn → message"         'grep -q "long work done" "$ORCH_NOTIFY_OUTBOX"'
+: > "$ORCH_NOTIFY_OUTBOX"
+echo '{"session_id":"s1","message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}' | php -n "$S/notify.php" --event=notification
+check "permission notification"     'grep -q "needs your permission" "$ORCH_NOTIFY_OUTBOX"'
+: > "$ORCH_NOTIFY_OUTBOX"
+export CLAUDE_PLUGIN_OPTION_WHATSAPP_PROVIDER=twilio CLAUDE_PLUGIN_OPTION_WHATSAPP_APIKEY="ACxx:tok" CLAUDE_PLUGIN_OPTION_WHATSAPP_FROM="+14155238886"
+echo '{"message":"x"}' | php -n "$S/notify.php" --event=notification
+check "twilio request"              'grep -q "Accounts/ACxx/Messages.json" "$ORCH_NOTIFY_OUTBOX" && grep -q "To=whatsapp:+420111222333" "$ORCH_NOTIFY_OUTBOX"'
+echo '{"notify":false}' > .claude/orch.json; : > "$ORCH_NOTIFY_OUTBOX"
+echo '{"message":"x"}' | php -n "$S/notify.php" --event=notification
+check "notify:false disables"       '[ ! -s "$ORCH_NOTIFY_OUTBOX" ]'
+rm .claude/orch.json
+
+echo "== init"
+mkdir -p vendor/bin && touch vendor/bin/phpunit && echo '{"permissions":{"allow":["Bash(ls)"],"deny":["Read(./vendor/**)"]}}' > .claude/settings.json
+php -n "$S/init.php" --project="$T" >/dev/null
+check "orch.json with phpunit"      'grep -q "vendor/bin/phpunit" .claude/orch.json'
+check "deny rules merged"           'grep -q "composer.lock" .claude/settings.json && grep -q "Bash(ls)" .claude/settings.json'
+check "no duplicate deny"           '[ "$(grep -c "Read(./vendor/\*\*)" .claude/settings.json)" -eq 1 ]'
+rm -rf vendor .claude/orch.json
+
+echo "== prices"
+cost(){ php -n -r 'require $argv[1]; var_export(orch_cost($argv[2], ["in"=>1000000,"out"=>1000000]));' "$S/common.php" "$1"; }
+check "opus 5.5 cost = 24 USD"      '[ "$(cost claude-opus-5-5)" = "24.0" ]'
+check "haiku 5.5 cost = 0.6 USD"    '[ "$(cost claude-haiku-5-5)" = "0.6" ]'
+check "unknown model → null"        '[ "$(cost gpt-x)" = "NULL" ]'
+
 echo "== stats"
 OUT="$(php -n "$S/stats.php" --project="$T")"
-check "stats counts writes"         'grep -q "worker: 3" <<<"$OUT"'
+check "stats counts writes"         'grep -q "worker 3" <<<"$OUT"'
+check "stats shows runs"            'grep -q "Add feature X" <<<"$OUT"'
+check "stats shows guard"           'grep -q "Pojistka zablokovala" <<<"$OUT"'
 
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

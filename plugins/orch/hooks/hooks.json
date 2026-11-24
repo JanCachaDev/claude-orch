@@ -1,17 +1,37 @@
 {
-  "description": "orch: track written files, clean temp files at session end, optional tests on stop",
+  "description": "orch: guard, file tracking, cleanup, optional tests, Discord/WhatsApp notifications",
   "hooks": {
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.php\"" } ] }
     ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/turn-start.php\"", "timeout": 10 } ] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/guard.php\"", "timeout": 10 } ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write",
-        "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/track-file.php\"" } ]
+        "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/track-file.php\"", "timeout": 10 } ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog|agent_needs_input",
+        "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.php\" --event=notification", "async": true } ]
       }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-tests.php\"", "timeout": 600 } ] }
+      {
+        "hooks": [
+          { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-tests.php\"", "timeout": 600 },
+          { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.php\" --event=stop", "async": true }
+        ]
+      }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.php\"" } ] }
