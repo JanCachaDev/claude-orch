@@ -1,0 +1,27 @@
+{
+    "patterns": [
+        "tmp_*",
+        "temp_*",
+        "*.tmp",
+        "scratch*",
+        "debug_*",
+        "*.bak",
+        "*.orig",
+        "test_output*"
+    ],
+    "protectedDirs": [
+        ".git",
+        ".claude",
+        ".idea",
+        "vendor",
+        "node_modules"
+    ],
+    "trashDays": 7,
+    "testCommand": null,
+    "notify": true,
+    "guard": {
+        "enabled": true,
+        "block": [],
+        "allow": []
+    }
+}
