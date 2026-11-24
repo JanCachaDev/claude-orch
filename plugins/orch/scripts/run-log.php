@@ -62,11 +62,18 @@ switch ($cmd) {
         $rounds = (int)($opts['rounds'] ?? 0);
         $cats = array_values(array_unique(array_filter(array_map('trim', explode(',', strtolower((string)($opts['categories'] ?? '')))),
             fn($c) => $c !== '' && $c !== 'none')));
+        $models = [];
+        foreach (explode(',', (string)($opts['models'] ?? '')) as $pair) {
+            [$a, $m] = array_map('trim', explode(':', $pair, 2)) + [1 => ''];
+            if ($a !== '' && $m !== '' && preg_match('/^[\w.:-]+$/', "$a$m")) {
+                $models[preg_replace('/^orch:/', '', $a)] = strtolower($m);
+            }
+        }
         $entry = [
             'id' => $id, 'event' => 'end', 'ts' => date('c'), 'epoch' => $now,
             'session' => $sess ?: null, 'mode' => $start['mode'], 'task' => $start['task'],
             'seconds' => $now - (int)$start['epoch'], 'verdict' => $verdict, 'rounds' => $rounds,
-            'categories' => $cats, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
+            'categories' => $cats, 'models' => (object)$models, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
             'tokens' => ['calls' => $sum['calls'], 'in' => $sum['in'] + $sum['cw5'] + $sum['cw1h'] + $sum['cread'], 'out' => $sum['out']],
             'usd' => round($sum['usd'], 4),
         ];

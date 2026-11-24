@@ -10,6 +10,13 @@ Parallel workers are faster but cost more tokens than /orch:run (each worker has
 
 Orchestrator rules: don't read or edit project files yourself, pass file paths not contents, no restating agent replies.
 
+**Model choice** — before step 1, rate the task and pass `model` on every Agent call (it overrides the agent's default):
+- **simple** (rename, typo, docs/comments, config value, one obvious edit): planner skipped, worker `haiku`, reviewer `haiku`.
+- **normal** (feature or bug in a few files, clear requirements): planner `sonnet`, worker `sonnet`, reviewer `haiku`.
+- **hard** (cross-module design, concurrency, security/auth, payments, data migrations, unclear root cause, >5 files): planner `opus`, worker `sonnet` (`opus` if the plan says the change is intricate), reviewer `sonnet`.
+- **Escalate once**: if review round 1 returns CRITICAL items, the fixing worker goes one level up (haiku → sonnet → opus). Never downgrade mid-run, never use opus for the reviewer.
+- If `.claude/orch.json` has `"models"` (e.g. `{"worker": "sonnet"}`), those values win. Tell the user the chosen level in one line, e.g. `Úroveň: normal (planner sonnet, worker sonnet, reviewer haiku)`.
+
 0. **Preconditions** — run `git status --porcelain` and `git rev-parse HEAD`.
    - Not a git repo or no commit yet → tell the user and stop.
    - Dirty working tree → stop and tell the user: workers start from the last commit, so commit or stash first.
@@ -22,5 +29,5 @@ Orchestrator rules: don't read or edit project files yourself, pass file paths n
    If a patch fails to apply, note it as open and continue with the others.
 4. **Review** — `orch:reviewer` with the task and the union of CHANGED/NEW files. On CHANGES_REQUESTED, send CRITICAL items to one `orch:worker` (no isolation, in the main repo) and review again. Max 2 review rounds.
 5. **Clean up worktrees** — for each worker path: `git worktree remove --force "<worktree>"`; then `git worktree prune`.
-6. **Log end** — `php -n "${CLAUDE_PLUGIN_ROOT}/scripts/run-log.php" end --id=<run id> --project="${CLAUDE_PROJECT_DIR}" --verdict=<last VERDICT> --rounds=<n> --categories=<from reviews or none> --summary="<N subtasks, M applied>"`.
+6. **Log end** — `php -n "${CLAUDE_PLUGIN_ROOT}/scripts/run-log.php" end --id=<run id> --project="${CLAUDE_PROJECT_DIR}" --verdict=<last VERDICT> --rounds=<n> --categories=<from reviews or none> --models=<agent:model,… as used> --summary="<N subtasks, M applied>"`.
 7. **Finish** — max 8 lines (user's language): subtasks and their result, applied patches, verdict, open items, run line. Do not commit.

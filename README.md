@@ -13,6 +13,7 @@ A token-efficient agent orchestration plugin for [Claude Code](https://code.clau
 | `/orch:backend <task>` | planner → worker → reviewer **and** DB optimizer in parallel (N+1 queries, indexes, caching) |
 | `/orch:parallel <task>` | the planner splits the task into 2–4 independent parts, workers run at the same time in separate git worktrees, then their patches are applied and reviewed |
 | `/orch:stats [days]` | tokens and **estimated USD** per agent and model, past runs, review stats, files, cleanup, guard (`stats.php --json` for machine-readable output) |
+| `/orch:global [days]` | machine-wide: disk used by `~/.claude` (transcripts, plugins, file history) and tokens + USD per project, agent and model across all sessions |
 | `/orch:init` | sets up the project: `.claude/orch.json` with a detected test command, plus deny rules for vendor/, node_modules/ and lock files |
 | `/orch:cleanup` | manual temp-file cleanup with a preview |
 | `/orch:restore [file]` | restores a file from the orch trash |
@@ -54,6 +55,8 @@ Then, in each project, run `/orch:init` once (optional, recommended).
 | `orch:worker` | sonnet, effort medium | Read, Edit, Write, Grep, Glob, Bash | implements the change; replies in ≤ 10 lines |
 | `orch:reviewer` | haiku, effort low, no CLAUDE.md | read-only | reviews `git diff` and returns `CATEGORIES` and `VERDICT` |
 | `orch:db-optimizer` | sonnet, effort low, no CLAUDE.md | read-only | N+1 queries, indexes, unbounded queries, transactions, caching |
+
+**Model per task:** the orchestrator rates each task as simple, normal or hard and passes `model` on every agent call. Simple tasks run the worker on haiku. Normal tasks use sonnet. Hard tasks (cross-module design, security, migrations, unclear root cause) put the planner on opus and the reviewer on sonnet. When review round 1 finds critical issues, the fixing worker is escalated one level. Pin models per project with `"models": {"worker": "sonnet"}` in `.claude/orch.json`. The models used are stored in `runs.log` and shown by `/orch:stats`.
 
 **Where the tokens are saved:**
 - The orchestrator never reads code itself.
@@ -116,6 +119,7 @@ The built-in rules are in [`guard.php`](plugins/orch/scripts/guard.php). When th
   "testCommand": "vendor/bin/phpunit --colors=never",
   "testTailLines": 30,
   "notify": true,
+  "models": { "planner": "sonnet" },
   "guard": { "enabled": true, "block": [], "allow": [] },
   "prices": { "claude-opus-5-5": [4.0, 20.0, 0.20] }
 }

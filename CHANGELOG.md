@@ -4,6 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
+### Added
+- `/orch:global [days]`: disk usage of `~/.claude` and tokens/USD per project, agent and model across all sessions (`global.php --json` too).
+- Per-task model choice in `/orch:run`, `/orch:bugfix`, `/orch:backend` and `/orch:parallel` (simple → haiku, normal → sonnet, hard → opus planner), with one-step escalation after a failed review and a `models` override in `.claude/orch.json`.
+- `run-log.php end --models=agent:model,…`; `/orch:stats` shows the models used per run.
+
 ## [0.2.0] - 2026-11-24
 
 ### Added
@@ -30,6 +37,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 - `/orch:stats [days]`: token usage per agent and model, plus file stats.
 - Optional tests on the `Stop` hook (`testCommand` in `.claude/orch.json`).
 
-[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JanCachaDev/claude-orch/releases/tag/v0.1.0

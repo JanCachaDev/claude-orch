@@ -9,10 +9,14 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/common.php';
 
+function orch_claude_home(): string
+{
+    return orch_norm(getenv('CLAUDE_CONFIG_DIR') ?: ((getenv('USERPROFILE') ?: getenv('HOME')) . '/.claude'));
+}
+
 function orch_transcript_dir(string $project): ?string
 {
-    $home = getenv('CLAUDE_CONFIG_DIR') ?: ((getenv('USERPROFILE') ?: getenv('HOME')) . '/.claude');
-    $root = orch_norm($home) . '/projects';
+    $root = orch_claude_home() . '/projects';
     $native = str_replace('/', DIRECTORY_SEPARATOR === '\\' || preg_match('~^[a-z]:~i', $project) ? '\\' : '/', $project);
     $slug = preg_replace('/[^A-Za-z0-9]/u', '-', $native) ?? preg_replace('/[^A-Za-z0-9]/', '-', $project);
     if (is_dir("$root/$slug")) {
@@ -32,9 +36,12 @@ function orch_transcript_dir(string $project): ?string
 function orch_usage_messages(string $project, int $since = 0): array
 {
     $dir = orch_transcript_dir($project);
-    if ($dir === null) {
-        return [];
-    }
+    return $dir === null ? [] : orch_usage_messages_dir($dir, $since);
+}
+
+/** Same as orch_usage_messages(), for one ~/.claude/projects/<slug> directory. */
+function orch_usage_messages_dir(string $dir, int $since = 0): array
+{
     $files = [];
     foreach (glob("$dir/*.jsonl") ?: [] as $f) {
         $files[$f] = 'main';
@@ -111,6 +118,37 @@ function orch_usage_sum(array $rows, array $prices = [], ?callable $filter = nul
 function orch_fmt_tokens(int $n): string
 {
     return $n >= 1_000_000 ? sprintf('%.1fM', $n / 1e6) : ($n >= 1000 ? sprintf('%.1fk', $n / 1e3) : (string)$n);
+}
+
+/** Recursive size in bytes and file count; never throws. */
+function orch_dir_size(string $dir): array
+{
+    $bytes = 0;
+    $files = 0;
+    if (!is_dir($dir)) {
+        return ['bytes' => 0, 'files' => 0];
+    }
+    try {
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+        foreach ($it as $f) {
+            if ($f->isFile()) {
+                $bytes += (int)$f->getSize();
+                $files++;
+            }
+        }
+    } catch (Throwable) {
+    }
+    return ['bytes' => $bytes, 'files' => $files];
+}
+
+function orch_fmt_bytes(int $b): string
+{
+    foreach (['GB' => 1 << 30, 'MB' => 1 << 20, 'kB' => 1 << 10] as $u => $n) {
+        if ($b >= $n) {
+            return sprintf('%.1f %s', $b / $n, $u);
+        }
+    }
+    return "$b B";
 }
 
 function orch_fmt_duration(int $s): string

@@ -23,12 +23,15 @@ Reply in the user's language. Do not run any tools.
 | `/orch:backend <úkol>` | změna s databází / dotazy / výkonem — navíc kontrola N+1, indexů, cache | `/orch:backend endpoint se seznamem faktur s filtrem podle data` |
 | `/orch:parallel <úkol>` | velký úkol, který jde rozdělit na nezávislé části; **vyžaduje čistý git strom** (commitni předtím) | `/orch:parallel přidej API pro produkty, kategorie a štítky` |
 
+Model se vybírá podle obtížnosti úkolu: jednoduchý → haiku, běžný → sonnet, těžký (návrh přes víc modulů, bezpečnost, migrace, nejasná příčina) → planner na opus. Když review najde kritické chyby, opravu dělá model o stupeň silnější. Natvrdo to nastavíš v `.claude/orch.json`: `"models": {"worker": "sonnet"}`.
+
 Agenti necommitují — po doběhnutí si změny projdi (`git diff`) a commitni sám.
 
 **Přehled a údržba:**
 | příkaz | co dělá |
 |---|---|
 | `/orch:stats [dny]` | tokeny a odhad USD podle agenta a modelu, běhy, verdikty review, soubory, pojistka (výchozí 7 dní) |
+| `/orch:global [dny]` | celý počítač: kolik místa zabírá `~/.claude` (přepisy, pluginy, historie souborů) a tokeny + USD podle projektu, agenta a modelu |
 | `/orch:cleanup` | ukáže dočasné soubory po agentech (`tmp_*`, `debug_*`, `*.bak` …) a po potvrzení je přesune do koše |
 | `/orch:restore [soubor]` | bez argumentu vypíše koš, se souborem ho vrátí zpět |
 | `/orch:notify-test` | pošle zkušební notifikaci na Discord / WhatsApp |

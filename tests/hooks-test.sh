@@ -95,7 +95,7 @@ export CLAUDE_PLUGIN_OPTION_WHATSAPP_PHONE="+420111222333"
 export CLAUDE_PLUGIN_OPTION_WHATSAPP_APIKEY="k3y"
 ID="$(php -n "$S/run-log.php" start --mode=run --session=s1 --project="$T" --task="Add feature X")"
 check "run id printed"              '[ -n "$ID" ]'
-OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --summary="done")"
+OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --models=orch:planner:sonnet,worker:haiku --summary="done")"
 check "run end summary"             'grep -q "APPROVED, 1 rounds" <<<"$OUT"'
 check "notification queued"         '[ -f .claude/orch/notify-pending.json ]'
 echo '{"session_id":"s1","last_assistant_message":"hi"}' | php -n "$S/notify.php" --event=stop
@@ -140,10 +140,18 @@ echo "== stats"
 OUT="$(php -n "$S/stats.php" --project="$T")"
 check "stats counts writes"         'grep -q "worker 3" <<<"$OUT"'
 check "stats shows runs"            'grep -q "Add feature X" <<<"$OUT"'
+check "stats shows run models"      'grep -q "worker:haiku" <<<"$OUT"'
 check "stats shows guard"           'grep -q "Pojistka zablokovala" <<<"$OUT"'
 JOUT="$(php -n "$S/stats.php" --project="$T" --json)"
 check "stats --json valid"          'php -n -r '"'"'exit(is_array(json_decode(stream_get_contents(STDIN), true)) ? 0 : 1);'"'"' <<<"$JOUT"'
 check "stats --json runs+files"     'php -n -r '"'"'$d = json_decode(stream_get_contents(STDIN), true); exit(isset($d["runs"], $d["files"]) ? 0 : 1);'"'"' <<<"$JOUT"'
 
+echo "== global"
+mkdir -p "$T/home/projects/p1/s1/subagents" "$T/home/plugins"
+php -n -r 'echo json_encode(["cwd" => "C:\x\proj", "sessionId" => "s1", "timestamp" => gmdate("c"), "message" => ["id" => "m1", "model" => "claude-opus-5-5", "usage" => ["input_tokens" => 1000, "output_tokens" => 500]]]), "\n";' > "$T/home/projects/p1/s1.jsonl"
+GOUT="$(CLAUDE_CONFIG_DIR="$T/home" php -n "$S/global.php")"
+check "global shows project path"   'grep -q "C:/x/proj" <<<"$GOUT"'
+check "global counts tokens"        'grep -q "claude-opus-5-5" <<<"$GOUT"'
+check "global --json valid"         'CLAUDE_CONFIG_DIR="$T/home" php -n "$S/global.php" --json | php -n -r "exit(isset(json_decode(stream_get_contents(STDIN), true)[\"projects\"]) ? 0 : 1);"'
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

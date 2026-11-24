@@ -57,10 +57,12 @@ $runs = array_values(array_filter(orch_read_jsonl("$state/runs.log"), fn($r) => 
 $out['runs'] = $runs;
 if ($runs) {
     echo "\nBěhy orchestrace (" . count($runs) . "):\n";
-    printf("  %-8s %-34s %-17s %6s %8s %7s\n", 'mód', 'úkol', 'verdikt', 'kola', 'čas', 'USD');
+    printf("  %-8s %-34s %-17s %6s %8s %7s  %s\n", 'mód', 'úkol', 'verdikt', 'kola', 'čas', 'USD', 'modely');
     foreach (array_slice(array_reverse($runs), 0, 10) as $r) {
-        printf("  %-8s %-34s %-17s %6d %8s %7.2f\n", $r['mode'], cut((string)$r['task'], 34), $r['verdict'], $r['rounds'],
-            orch_fmt_duration((int)$r['seconds']), (float)$r['usd']);
+        $m = (array)($r['models'] ?? []);
+        printf("  %-8s %-34s %-17s %6d %8s %7.2f  %s\n", $r['mode'], cut((string)$r['task'], 34), $r['verdict'], $r['rounds'],
+            orch_fmt_duration((int)$r['seconds']), (float)$r['usd'],
+            implode(' ', array_map(fn($a, $v) => "$a:$v", array_keys($m), $m)) ?: '-');
     }
     $approvedFirst = count(array_filter($runs, fn($r) => $r['verdict'] === 'APPROVED' && $r['rounds'] <= 1));
     $avgRounds = array_sum(array_column($runs, 'rounds')) / count($runs);
