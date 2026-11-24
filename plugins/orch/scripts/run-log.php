@@ -28,8 +28,12 @@ $session = preg_replace('/[^A-Za-z0-9_-]/', '', (string)($opts['session'] ?? '')
 switch ($cmd) {
     case 'start':
         $id = date('Ymd-His') . '-' . substr(bin2hex(random_bytes(2)), 0, 4);
+        // count cost from the start of the user's turn (the /orch:* prompt), not from this call
+        $turnFile = "$state/sessions/$session.turn";
+        $turn = ($session !== '' && is_file($turnFile)) ? (int)file_get_contents($turnFile) : 0;
+        $costFrom = ($turn > 0 && time() - $turn < 600) ? $turn : time();
         orch_append_jsonl($log, [
-            'id' => $id, 'event' => 'start', 'ts' => date('c'), 'epoch' => time(),
+            'id' => $id, 'event' => 'start', 'ts' => date('c'), 'epoch' => time(), 'cost_from' => $costFrom,
             'session' => $session ?: null, 'mode' => (string)($opts['mode'] ?? 'run'),
             'task' => substr(trim((string)($opts['task'] ?? '')), 0, 300),
         ]);
@@ -50,9 +54,10 @@ switch ($cmd) {
         }
         $now = time();
         $sess = (string)($start['session'] ?? $session);
-        $rows = orch_usage_messages($project, (int)$start['epoch'] - 5);
+        $from = (int)($start['cost_from'] ?? $start['epoch']) - 2;
+        $rows = orch_usage_messages($project, $from);
         $sum = orch_usage_sum($rows, orch_config($project)['prices'],
-            fn($r) => ($sess === '' || $r['session'] === $sess) && $r['ts'] >= $start['epoch'] && $r['ts'] <= $now + 5);
+            fn($r) => ($sess === '' || $r['session'] === $sess) && $r['ts'] >= $from && $r['ts'] <= $now + 5);
         $verdict = strtoupper((string)($opts['verdict'] ?? 'UNKNOWN'));
         $rounds = (int)($opts['rounds'] ?? 0);
         $cats = array_values(array_filter(array_map('trim', explode(',', strtolower((string)($opts['categories'] ?? ''))))));
