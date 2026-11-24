@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+
+      - name: Check tag matches plugin.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(php -n -r 'echo json_decode(file_get_contents("plugins/orch/.claude-plugin/plugin.json"))->version;')"
+          echo "tag=$TAG plugin.json=$VER"
+          [ "$TAG" = "$VER" ] || { echo "::error::Tag v$TAG != plugin.json version $VER"; exit 1; }
+
+      - name: Hook tests
+        run: bash tests/hooks-test.sh
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md" > notes.md
+          cat notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git archive --format=zip --prefix=claude-orch/ -o "claude-orch-${GITHUB_REF_NAME}.zip" HEAD
+          gh release create "$GITHUB_REF_NAME" "claude-orch-${GITHUB_REF_NAME}.zip" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md

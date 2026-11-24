@@ -1,0 +1,14 @@
+{
+  "name": "claude-orch",
+  "owner": { "name": "JanCachaDev" },
+  "metadata": {
+    "description": "Token-efficient agent orchestration for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "orch",
+      "source": "./plugins/orch",
+      "description": "Planner → worker → reviewer loop, temp file tracking & cleanup, token stats."
+    }
+  ]
+}

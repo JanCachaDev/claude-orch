@@ -1,0 +1,10 @@
+{
+  "name": "orch",
+  "version": "0.1.0",
+  "description": "Token-efficient agent orchestration (planner → worker → reviewer), temp file tracking & cleanup, token stats.",
+  "author": { "name": "JanCachaDev", "url": "https://github.com/JanCachaDev" },
+  "homepage": "https://github.com/JanCachaDev/claude-orch",
+  "repository": "https://github.com/JanCachaDev/claude-orch",
+  "license": "MIT",
+  "keywords": ["agents", "orchestration", "tokens", "cleanup", "hooks"]
+}

@@ -1,0 +1,20 @@
+{
+  "description": "orch: track written files, clean temp files at session end, optional tests on stop",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.php\"" } ] }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/track-file.php\"" } ]
+      }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-tests.php\"", "timeout": 600 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/cleanup.php\"" } ] }
+    ]
+  }
+}
