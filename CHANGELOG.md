@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 ### Added
 - `/orch:help [command]`: overview of all commands with examples.
 - `/orch:bugfix`, `/orch:backend` (with `orch:db-optimizer`) and `/orch:parallel` (git worktrees).
@@ -28,5 +30,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 - `/orch:stats [days]`: token usage per agent and model, plus file stats.
 - Optional tests on the `Stop` hook (`testCommand` in `.claude/orch.json`).
 
-[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JanCachaDev/claude-orch/releases/tag/v0.1.0
