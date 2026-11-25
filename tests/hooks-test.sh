@@ -313,5 +313,35 @@ check "auto runs after 24h"         '[ ! -e "$H4/projects/pp/recent1.jsonl" ]'
 CLAUDE_CONFIG_DIR="$H4" php -n "$S/prune.php" --restore-last >/dev/null
 check "restore-last after auto"     '[ -f "$H4/projects/pp/recent1.jsonl" ]'
 
+echo "== version"
+H5="$T/home5"; MK="$H5/plugins/marketplaces/claude-orch/plugins/orch/.claude-plugin"; mkdir -p "$MK"
+LOADED="$(php -n -r 'echo json_decode(file_get_contents($argv[1]))->version;' "$ROOT/plugins/orch/.claude-plugin/plugin.json")"
+inst(){ echo "{\"version\":2,\"plugins\":{\"orch@claude-orch\":[{\"scope\":\"user\",\"version\":\"$1\"}]}}" > "$H5/plugins/installed_plugins.json"; }
+inst 9.9.9; echo '{"name":"orch","version":"9.9.9"}' > "$MK/plugin.json"
+VOUT="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline)"
+check "version shows loaded"        'grep -q "toto sezení: *$LOADED" <<<"$VOUT"'
+check "version shows installed"     'grep -q "nainstalováno: *9.9.9" <<<"$VOUT"'
+check "version → reload-plugins"    'grep -q "/reload-plugins" <<<"$VOUT"'
+echo '{"name":"orch","version":"10.0.0"}' > "$MK/plugin.json"
+VOUT="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline)"
+check "version → update command"    'grep -q "claude plugin update orch@claude-orch" <<<"$VOUT" && grep -q "nejnovější: *10.0.0" <<<"$VOUT"'
+check "version --json"              'CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline --json | grep -q "\"reload_needed\": true"'
+VP="$T/vp"; mkdir -p "$VP"
+vts(){ echo "{\"session_id\":\"$1\"}" | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$VP" php -n "$S/turn-start.php"; }
+inst "$LOADED"; TS0="$(vts v1)"
+check "no hint when up to date"     '[ -z "$TS0" ]'
+inst 9.9.9-abc123; TS1="$(vts v1)"; TS2="$(vts v1)"
+check "hint after update mid-session" 'grep -q "nainstalovaná je 9.9.9 " <<<"$TS1" && grep -q systemMessage <<<"$TS1"'
+check "hint once per version"       '[ -z "$TS2" ]'
+inst 9.9.10; TS3="$(vts v1)"
+check "hint again for newer version" 'grep -q "9.9.10" <<<"$TS3"'
+mkdir -p "$VP/.claude/orch"; echo "budget over" > "$VP/.claude/orch/budget-alert.txt"; inst 9.9.11; TS4="$(vts v1)"
+check "budget + hint in one json"   'php -n -r "\$m = json_decode(stream_get_contents(STDIN), true)[\"systemMessage\"] ?? \"\"; exit(str_contains(\$m, \"budget over\") && str_contains(\$m, \"9.9.11\") ? 0 : 1);" <<<"$TS4"'
+rm -f "$H5/plugins/installed_plugins.json"; TS5="$(vts v3)"
+check "no installed file → silent"  '[ -z "$TS5" ]'
+VOUT="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline)"
+check "no installed → update advice" 'grep -q "nainstalováno: *?" <<<"$VOUT" && grep -q "claude plugin update" <<<"$VOUT"'
+check "remote lookup has timeout"   'start=$(date +%s); php -n -r "require \"$SW/lib-version.php\"; orch_remote_version(1);" >/dev/null; [ $(( $(date +%s) - start )) -le 4 ]'
+
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

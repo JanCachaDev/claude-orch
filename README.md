@@ -20,6 +20,7 @@ A token-efficient agent orchestration plugin for [Claude Code](https://code.clau
 | `/orch:cleanup` | manual temp-file cleanup with a preview |
 | `/orch:restore [file]` | restores a file from the orch trash |
 | `/orch:notify-test` | sends a test notification |
+| `/orch:version` (`/orch:v`) | the orch version this session runs, the installed one and the newest on GitHub, and what to do when they differ |
 | `/orch:help [command]` | lists all commands with examples and when to use which |
 
 These run automatically as hooks, which cost zero tokens:
@@ -30,6 +31,7 @@ These run automatically as hooks, which cost zero tokens:
 - **Budget alerts** (async, `Stop`): when a project crosses its daily or weekly USD limit, you get one Discord/WhatsApp message per period and a warning on your next prompt. Set limits for all projects in `/plugin` → `orch` → Configure (`budget_day_usd`, `budget_week_usd`) or per project with `"budget": {"day": 10, "week": 50}`.
 - **Session hint** (`SessionStart`): when the project has a named session, a one-line reminder with `claude --resume <id>`; turn off with `"sessionHint": false` in `.claude/orch.json`.
 - **Auto-prune** (async, `SessionStart`): once a day moves unused unnamed sessions (default 30 days, `prune_days`, 0 = off) to `~/.claude/orch-trash`; named, job and running sessions are never pruned; a project's `memory/` moves to the trash only when no session of that project is left.
+- **Update hint** (`UserPromptSubmit`): when a newer orch is installed than the one an open session loaded, the first prompt shows a one-time hint to run `/reload-plugins`.
 - **Notifications** (async): Discord and/or WhatsApp when a `/orch:*` run finishes, when a long turn ends, or when Claude is waiting for your permission.
 
 ## Requirements
@@ -49,6 +51,8 @@ Update:
 claude plugin marketplace update claude-orch
 claude plugin update orch@claude-orch
 ```
+
+New sessions pick up the update. In sessions that are already open, run `/reload-plugins` (Claude Code loads plugins when a session starts). `/orch:version` shows which version a session runs.
 
 Then, in each project, run `/orch:init` once (optional, recommended).
 

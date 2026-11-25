@@ -98,8 +98,8 @@ try {
                 $purged++;
             }
         }
-        // session start markers older than trash retention are useless
-        foreach (glob("$state/sessions/*.start") ?: [] as $f) {
+        // session markers (start, turn, version hint) older than trash retention are useless
+        foreach (array_merge(...array_map(fn($e) => glob("$state/sessions/*.$e") ?: [], ["start", "turn", "vercheck"])) as $f) {
             if (@filemtime($f) < $limit) {
                 @unlink($f);
             }

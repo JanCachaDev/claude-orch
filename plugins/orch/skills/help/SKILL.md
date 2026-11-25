@@ -39,9 +39,11 @@ Agenti necommitují — po doběhnutí si změny projdi (`git diff`) a commitni 
 | `/orch:cleanup` | ukáže dočasné soubory po agentech (`tmp_*`, `debug_*`, `*.bak` …) a po potvrzení je přesune do koše |
 | `/orch:restore [soubor]` | bez argumentu vypíše koš, se souborem ho vrátí zpět |
 | `/orch:notify-test` | pošle zkušební notifikaci na Discord / WhatsApp |
+| `/orch:version` (`/orch:v`) | jakou verzi orch běží toto sezení, jaká je nainstalovaná a nejnovější na GitHubu, a co udělat, když se liší |
 | `/orch:help [příkaz]` | tahle nápověda |
 
 **Běží samo (hooky, 0 tokenů):**
+- Upozornění na aktualizaci — když je nainstalovaná novější verze orch, než jakou načetlo otevřené sezení, první zpráva v sezení jednou připomene `/reload-plugins`.
 - Pojistka — zablokuje `rm -rf /`, `git push --force`, `git reset --hard`, `DROP TABLE`, `DELETE` bez `WHERE`, `curl … | sh`. Výjimky: `guard.allow` v `.claude/orch.json`.
 - Úklid na konci sezení — dočasné soubory, které nejsou v gitu, jdou do `.claude/orch/trash/` (maže se po 7 dnech).
 - Testy po odpovědi — jen když je v `.claude/orch.json` nastaven `testCommand` a máš neuložené změny.
@@ -51,6 +53,7 @@ Agenti necommitují — po doběhnutí si změny projdi (`git diff`) a commitni 
 - Rozpočet — když projekt přesáhne denní/týdenní limit v USD, pošle jednu zprávu za den/týden a ukáže varování u dalšího promptu.
 
 **Nastavení:**
+- Aktualizace: `claude plugin marketplace update claude-orch` a `claude plugin update orch@claude-orch`; v už otevřených sezeních pak `/reload-plugins`. Verzi ověříš přes `/orch:version`.
 - Notifikace a rozpočet pro všechny projekty: `/plugin` → `orch` → Configure (Discord webhook URL, WhatsApp číslo + apikey, `budget_day_usd`, `budget_week_usd`).
 - Projekt: `.claude/orch.json` (`testCommand`, `notify`, `guard`, `models`, `team`, `budget`, `trashDays`, `prices`).
 - `.claude/` patří do `.gitignore`, pokud ho nechceš sdílet s týmem.

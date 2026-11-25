@@ -4,6 +4,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-25
+
+### Added
+- `/orch:version` (alias `/orch:v`): the orch version this session runs, the installed one and the newest on GitHub, with the update or `/reload-plugins` step to take (`version.php --json`, `--offline`).
+- On the first prompt of a session that runs an older orch than the installed one, a one-time hint to run `/reload-plugins`.
+
+### Changed
+- README and `/orch:help`: updating now ends with `/reload-plugins` in sessions that are already open.
+
 ## [0.5.0] - 2026-11-25
 
 ### Added
@@ -63,7 +72,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 - `/orch:stats [days]`: token usage per agent and model, plus file stats.
 - Optional tests on the `Stop` hook (`testCommand` in `.claude/orch.json`).
 
-[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.2.0...v0.3.0
