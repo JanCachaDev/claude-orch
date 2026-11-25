@@ -95,8 +95,9 @@ export CLAUDE_PLUGIN_OPTION_WHATSAPP_PHONE="+420111222333"
 export CLAUDE_PLUGIN_OPTION_WHATSAPP_APIKEY="k3y"
 ID="$(php -n "$S/run-log.php" start --mode=run --session=s1 --project="$T" --task="Add feature X")"
 check "run id printed"              '[ -n "$ID" ]'
-OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --models=orch:planner:sonnet,worker:haiku --summary="done")"
+OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --models=orch:planner:sonnet,worker:haiku --skills="superpowers:test-driven-development,playwright,none,a b;rm" --summary="done")"
 check "run end summary"             'grep -q "APPROVED, 1 rounds" <<<"$OUT"'
+check "runs.log has skills"          'grep -q "\"skills\":\[\"superpowers:test-driven-development\",\"playwright\"\]" .claude/orch/runs.log'
 check "notification queued"         '[ -f .claude/orch/notify-pending.json ]'
 echo '{"session_id":"s1","last_assistant_message":"hi"}' | php -n "$S/notify.php" --event=stop
 check "pending sent + removed"      '[ ! -f .claude/orch/notify-pending.json ]'
@@ -141,6 +142,7 @@ OUT="$(php -n "$S/stats.php" --project="$T")"
 check "stats counts writes"         'grep -q "worker 3" <<<"$OUT"'
 check "stats shows runs"            'grep -q "Add feature X" <<<"$OUT"'
 check "stats shows run models"      'grep -q "worker:haiku" <<<"$OUT"'
+check "stats shows skills"           'grep -q "Použité skills: superpowers:test-driven-development (1)" <<<"$OUT"'
 check "stats shows guard"           'grep -q "Pojistka zablokovala" <<<"$OUT"'
 JOUT="$(php -n "$S/stats.php" --project="$T" --json)"
 check "stats --json valid"          'php -n -r '"'"'exit(is_array(json_decode(stream_get_contents(STDIN), true)) ? 0 : 1);'"'"' <<<"$JOUT"'
@@ -188,6 +190,128 @@ check "prune moved old session"     '[ ! -e "$T/home/projects/p2/old1.jsonl" ] &
 check "prune kept recent session"   '[ -f "$T/home/projects/p2/new1.jsonl" ]'
 CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --restore-last >/dev/null
 check "prune --restore-last"        '[ -f "$T/home/projects/p2/old1.jsonl" ] && [ -f "$T/home/projects/p2/old1/subagents/agent-a.jsonl" ] && [ -f "$T/home/file-history/old1/f" ]'
+
+echo "== named sessions"
+H2="$T/home2"; SL="proj-slug"; mkdir -p "$H2/projects/$SL" "$H2/jobs/j1"
+{ head -c 400000 /dev/zero | tr '\0' 'x'; echo; echo '{"type":"custom-title","customTitle":"Outside","sessionId":"named1"}'; head -c 100000 /dev/zero | tr '\0' 'y'; echo; echo '{"type":"custom-title","customTitle":"Old","sessionId":"named1"}'; head -c 50000 /dev/zero | tr '\0' 'z'; echo; echo '{"type":"custom-title","customTitle":"Studygraph","sessionId":"named1"}'; } > "$H2/projects/$SL/named1.jsonl"
+echo '{"type":"user"}' > "$H2/projects/$SL/plain1.jsonl"
+echo "{\"sessionId\":\"job1\",\"resumeSessionId\":\"job2\",\"name\":\"TJS\",\"nameSource\":\"user\",\"cwd\":\"$T\"}" > "$H2/jobs/j1/state.json"
+printf '%s
+' '{"sessionId":"plain1","project":"x","timestamp":1,"display":"a"}' '{"sessionId":"plain1","project":"x","timestamp":2,"display":"b"}' '{"sessionId":"named1","project":"x","timestamp":3,"display":"c"}' > "$H2/history.jsonl"
+mkdir -p "$H2/jobs/j2" "$H2/projects/other"; echo '{"sessionId":"job3","name":"","nameSource":"user","cwd":"x"}' > "$H2/jobs/j2/state.json"
+echo '{"type":"custom-title","customTitle":"Elsewhere","sessionId":"oth1"}' > "$H2/projects/other/oth1.jsonl"
+TP="$H2/projects/$SL/new1.jsonl"
+HOUT="$(echo "{\"session_id\":\"new1\",\"source\":\"startup\",\"transcript_path\":\"$TP\",\"cwd\":\"$T\"}" | CLAUDE_CONFIG_DIR="$H2" php -n "$S/session-start.php")"
+check "hint names session"          'grep -q Studygraph <<<"$HOUT" && grep -q "claude --resume named1" <<<"$HOUT"'
+check "hint uses last title"        '! grep -q "Old\|Outside" <<<"$HOUT"'
+check "hint is valid json"          'php -n -r "exit(isset(json_decode(file_get_contents(\"php://stdin\"),true)[\"systemMessage\"])?0:1);" <<<"$HOUT"'
+ROUT="$(echo "{\"session_id\":\"new1\",\"source\":\"resume\",\"transcript_path\":\"$TP\",\"cwd\":\"$T\"}" | CLAUDE_CONFIG_DIR="$H2" php -n "$S/session-start.php")"
+check "no hint on resume"           '[ -z "$ROUT" ]'
+SOUT="$(echo "{\"session_id\":\"named1\",\"source\":\"startup\",\"transcript_path\":\"$H2/projects/$SL/named1.jsonl\",\"cwd\":\"$T\"}" | CLAUDE_CONFIG_DIR="$H2" php -n "$S/session-start.php")"
+check "no hint for itself"          '[ -z "$SOUT" ]'
+mkdir -p "$T/.claude"; echo '{"sessionHint":false}' > "$T/.claude/orch.json"
+OOUT="$(echo "{\"session_id\":\"new1\",\"source\":\"startup\",\"transcript_path\":\"$TP\",\"cwd\":\"$T\"}" | CLAUDE_CONFIG_DIR="$H2" php -n "$S/session-start.php")"
+check "sessionHint:false silences"  '[ -z "$OOUT" ]'
+rm -f "$T/.claude/orch.json"
+SW="$(cd "$S" && (pwd -W 2>/dev/null || pwd))"
+LIB="$(CLAUDE_CONFIG_DIR="$H2" php -n -r 'require "'"$SW"'/lib-sessions.php"; $h=orch_claude_home(); echo json_encode([orch_named_sessions($h), orch_job_sessions($h), orch_prompt_counts($h)]);')"
+check "lib named includes job name" 'grep -q "\"job1\":{\"name\":\"TJS\"" <<<"$LIB"'
+check "lib job sessions"            'grep -q "\"job2\":true" <<<"$LIB"'
+check "lib skips empty job name"    '! grep -q "\"job3\":{" <<<"$LIB"'
+check "hint ignores other projects" '! grep -q Elsewhere <<<"$HOUT"'
+check "lib prompt counts"           'grep -q "\"plain1\":2" <<<"$LIB"'
+
+echo "== prune protection + auto"
+mkprune() { # $1 = home dir
+  local H="$1" P="$1/projects/pp"; mkdir -p "$P" "$H/jobs/jb"
+  echo '{"type":"custom-title","customTitle":"Keepme","sessionId":"namedold"}' > "$P/namedold.jsonl"
+  echo '{"type":"user"}' > "$P/jobold.jsonl"
+  echo '{"type":"user"}' > "$P/plainold.jsonl"
+  echo '{"type":"user"}' > "$P/shortone.jsonl"
+  echo '{"type":"user"}' > "$P/recent1.jsonl"
+  head -c 150000 /dev/zero | tr '\0' 'x' > "$P/bigclaudep.jsonl"
+  echo "{\"sessionId\":\"jobold\",\"name\":\"\",\"cwd\":\"x\"}" > "$H/jobs/jb/state.json"
+  printf '%s
+' '{"sessionId":"plainold"}' '{"sessionId":"plainold"}' '{"sessionId":"plainold"}' '{"sessionId":"shortone"}' '{"sessionId":"recent1"}' > "$H/history.jsonl"
+  touch -d "40 days ago" "$P/namedold.jsonl" "$P/jobold.jsonl" "$P/plainold.jsonl"
+  touch -d "2 days ago" "$P/shortone.jsonl" "$P/bigclaudep.jsonl"
+  echo '{"type":"user"}' > "$P/live1.jsonl"; mkdir -p "$H/sessions"; echo '{"pid":1,"sessionId":"live1","kind":"interactive"}' > "$H/sessions/1.json"
+  echo '{"type":"custom-title","customTitle":"ShortNamed","sessionId":"shortnamed"}' > "$P/shortnamed.jsonl"
+  echo '{"type":"user"}' > "$P/resumed.jsonl"; mkdir -p "$H/jobs/jc"; echo '{"sessionId":"x","resumeSessionId":"resumed"}' > "$H/jobs/jc/state.json"
+  echo '{"type":"user"}' > "$P/zeroprompt.jsonl"
+  touch -d "2 days ago" "$P/live1.jsonl" "$P/shortnamed.jsonl" "$P/resumed.jsonl" "$P/zeroprompt.jsonl"
+  printf '%s
+' '{"sessionId":"live1"}' '{"sessionId":"shortnamed"}' '{"sessionId":"resumed"}' >> "$H/history.jsonl"
+}
+H3="$T/home3"; mkprune "$H3"
+PV="$(CLAUDE_CONFIG_DIR="$H3" php -n "$S/prune.php" --days=30 --dry-run)"
+check "prune preview counts protected" 'grep -q "chráněno: 5 (pojmenovaná, úlohy, běžící)" <<<"$PV"'
+check "prune preview: plain + short"   'grep -q "pp .* 3 sezení" <<<"$PV"'
+CLAUDE_CONFIG_DIR="$H3" php -n "$S/prune.php" --days=30 >/dev/null
+check "prune keeps named+job"       '[ -f "$H3/projects/pp/namedold.jsonl" ] && [ -f "$H3/projects/pp/jobold.jsonl" ]'
+check "prune moves short session"   '[ ! -e "$H3/projects/pp/shortone.jsonl" ] && [ ! -e "$H3/projects/pp/plainold.jsonl" ] && [ ! -e "$H3/projects/pp/zeroprompt.jsonl" ]'
+check "prune keeps live session"    '[ -f "$H3/projects/pp/live1.jsonl" ]'
+check "short named session kept"    '[ -f "$H3/projects/pp/shortnamed.jsonl" ]'
+check "resumeSessionId job kept"    '[ -f "$H3/projects/pp/resumed.jsonl" ]'
+check "prune keeps recent + big unlisted" '[ -f "$H3/projects/pp/recent1.jsonl" ] && [ -f "$H3/projects/pp/bigclaudep.jsonl" ]'
+CLAUDE_CONFIG_DIR="$H3" php -n "$S/prune.php" --restore-last >/dev/null
+check "restore-last ignores stamp files" '[ -f "$H3/projects/pp/shortone.jsonl" ]'
+H5="$T/home5"; mkprune "$H5"; echo 'garbage{' > "$H5/jobs/jb/state.json"
+FC="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/prune.php" --days=30)"
+check "corrupt job state aborts"    '[ -f "$H5/projects/pp/plainold.jsonl" ] && [ -f "$H5/projects/pp/shortone.jsonl" ] && [ -n "$FC" ]'
+echo '{}' | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
+check "auto corrupt: nothing, no stamp" '[ -f "$H5/projects/pp/plainold.jsonl" ] && [ ! -f "$H5/orch-trash/.last-auto" ]'
+H5b="$T/home5b"; mkprune "$H5b"; mkdir -p "$H5b/sessions"; echo 'bad{' > "$H5b/sessions/2.json"
+FS="$(CLAUDE_CONFIG_DIR="$H5b" php -n "$S/prune.php" --days=30)"
+check "corrupt sessions file aborts" '[ -f "$H5b/projects/pp/plainold.jsonl" ] && [ -n "$FS" ]'
+echo '{}' | CLAUDE_CONFIG_DIR="$H5b" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
+check "auto corrupt sessions: nothing" '[ -f "$H5b/projects/pp/plainold.jsonl" ] && [ ! -f "$H5b/orch-trash/.last-auto" ]'
+
+echo "== orphaned memory"
+H6="$T/home6"; mkdir -p "$H6/projects"
+for d in onlymem hassess lastgone; do mkdir -p "$H6/projects/$d/memory"; echo m > "$H6/projects/$d/memory/m.md"; done
+echo '{"type":"user"}' > "$H6/projects/hassess/s1.jsonl"
+echo '{"type":"user"}' > "$H6/projects/lastgone/old.jsonl"; touch -d "40 days ago" "$H6/projects/lastgone/old.jsonl"
+printf '%s
+' '{"sessionId":"old"}' '{"sessionId":"old"}' '{"sessionId":"old"}' > "$H6/history.jsonl"
+OV="$(CLAUDE_CONFIG_DIR="$H6" php -n "$S/prune.php" --days=30 --dry-run)"
+check "orphan preview"              'grep -q "osiřelá paměť: onlymem" <<<"$OV" && grep -q "osiřelá paměť: lastgone" <<<"$OV" && ! grep -q "osiřelá paměť: hassess" <<<"$OV" && [ -d "$H6/projects/onlymem/memory" ]'
+CLAUDE_CONFIG_DIR="$H6" php -n "$S/prune.php" --days=30 >/dev/null
+check "memory moved: only memory/"  '[ ! -e "$H6/projects/onlymem" ]'
+check "memory moved: last session gone" '[ ! -e "$H6/projects/lastgone" ]'
+check "memory kept: has session"    '[ -f "$H6/projects/hassess/memory/m.md" ]'
+CLAUDE_CONFIG_DIR="$H6" php -n "$S/prune.php" --restore-last >/dev/null
+check "restore-last brings memory"  '[ -f "$H6/projects/onlymem/memory/m.md" ] && [ -f "$H6/projects/lastgone/memory/m.md" ] && [ -f "$H6/projects/lastgone/old.jsonl" ]'
+
+H7="$T/home7"; mkdir -p "$H7/projects/memonly/memory" "$H7/projects/newproj/memory" "$H7/projects/livep/memory" "$H7/sessions"
+echo a > "$H7/projects/memonly/memory/a.md"; echo n > "$H7/projects/newproj/memory/n.md"; echo l > "$H7/projects/livep/memory/l.md"
+echo "{\"pid\":1,\"sessionId\":\"zz\",\"cwd\":\"$T/live-proj\"}" > "$H7/sessions/1.json"
+mkdir -p "$H7/projects/$(printf '%s' "$T/live-proj" | sed 's/[^A-Za-z0-9]/-/g')/memory"; echo l > "$H7/projects/$(printf '%s' "$T/live-proj" | sed 's/[^A-Za-z0-9]/-/g')/memory/l.md"
+echo "{\"session_id\":\"zz\",\"transcript_path\":\"$H7/projects/newproj/zz.jsonl\",\"cwd\":\"$T/elsewhere\"}" | CLAUDE_CONFIG_DIR="$H7" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
+check "auto keeps hook project memory" '[ -f "$H7/projects/newproj/memory/n.md" ]'
+check "live cwd protects memory"      '[ -f "$H7/projects/$(printf "%s" "$T/live-proj" | sed "s/[^A-Za-z0-9]/-/g")/memory/l.md" ]'
+check "auto moved unrelated memory"   '[ ! -e "$H7/projects/memonly" ]'
+mkdir -p "$H7/projects/memonly/memory"; echo NEW > "$H7/projects/memonly/memory/b.md"; echo changed > "$H7/projects/memonly/memory/a.md"
+RO="$(CLAUDE_CONFIG_DIR="$H7" php -n "$S/prune.php" --restore-last)"
+check "restore merges, keeps both"    '[ -f "$H7/projects/memonly/memory/b.md" ] && grep -q changed "$H7/projects/memonly/memory/a.md"'
+check "restore leaves conflict in trash" '[ -n "$(find "$H7/orch-trash" -name a.md)" ] && grep -q "a.md" <<<"$RO"'
+
+H4="$T/home4"; mkprune "$H4"
+AO="$(echo '{"session_id":"plainold"}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto)"
+check "auto is silent"              '[ -z "$AO" ]'
+check "auto honours hook session id" '[ -f "$H4/projects/pp/plainold.jsonl" ] && [ ! -e "$H4/projects/pp/shortone.jsonl" ]'
+check "auto keeps named+job"        '[ -f "$H4/projects/pp/namedold.jsonl" ] && [ -f "$H4/projects/pp/jobold.jsonl" ]'
+check "auto writes log + stamp"     '[ -s "$H4/orch-trash/prune.log" ] && [ -f "$H4/orch-trash/.last-auto" ]'
+touch -d "40 days ago" "$H4/projects/pp/recent1.jsonl"
+echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
+check "auto rate-limited 24h"       '[ -f "$H4/projects/pp/recent1.jsonl" ]'
+touch -d "2 days ago" "$H4/orch-trash/.last-auto"
+echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=0 php -n "$S/prune.php" --auto
+check "auto PRUNE_DAYS=0 is off"    '[ -f "$H4/projects/pp/recent1.jsonl" ]'
+echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
+check "auto runs after 24h"         '[ ! -e "$H4/projects/pp/recent1.jsonl" ]'
+CLAUDE_CONFIG_DIR="$H4" php -n "$S/prune.php" --restore-last >/dev/null
+check "restore-last after auto"     '[ -f "$H4/projects/pp/recent1.jsonl" ]'
 
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

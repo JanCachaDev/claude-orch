@@ -5,7 +5,7 @@ declare(strict_types=1);
  *
  *   start  --mode=run|bugfix|backend|parallel --task="…" --session=<id>   → prints run id
  *   end    --id=<id> --verdict=APPROVED|CHANGES_REQUESTED|ABORTED --rounds=N
- *          [--categories=bug,security,…] [--summary="…"]
+ *          [--categories=bug,security,…] [--skills=name,name,…] [--summary="…"]
  *          → logs the run (duration, tokens, USD) and queues a notification for the Stop hook
  *   notify --text="…" --session=<id>   → queues a custom notification (sent by the Stop hook)
  *
@@ -69,11 +69,13 @@ switch ($cmd) {
                 $models[preg_replace('/^orch:/', '', $a)] = strtolower($m);
             }
         }
+        $skills = array_values(array_unique(array_filter(array_map('trim', explode(',', (string)($opts['skills'] ?? ''))),
+            fn($s) => $s !== '' && $s !== 'none' && preg_match('/^[\w.:@\/-]+$/', $s))));
         $entry = [
             'id' => $id, 'event' => 'end', 'ts' => date('c'), 'epoch' => $now,
             'session' => $sess ?: null, 'mode' => $start['mode'], 'task' => $start['task'],
             'seconds' => $now - (int)$start['epoch'], 'verdict' => $verdict, 'rounds' => $rounds,
-            'categories' => $cats, 'models' => (object)$models, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
+            'categories' => $cats, 'models' => (object)$models, 'skills' => $skills, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
             'tokens' => ['calls' => $sum['calls'], 'in' => $sum['in'] + $sum['cw5'] + $sum['cw1h'] + $sum['cread'], 'out' => $sum['out']],
             'usd' => round($sum['usd'], 4),
         ];

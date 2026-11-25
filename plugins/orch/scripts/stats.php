@@ -88,6 +88,16 @@ if ($runs) {
     if ($cats) {
         echo 'Nejčastější nálezy: ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($cats), $cats)) . "\n";
     }
+    $skillCounts = [];
+    foreach ($runs as $r) {
+        foreach ($r['skills'] ?? [] as $s) {
+            $skillCounts[$s] = ($skillCounts[$s] ?? 0) + 1;
+        }
+    }
+    arsort($skillCounts);
+    if ($skillCounts) {
+        echo 'Použité skills: ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($skillCounts), $skillCounts)) . "\n";
+    }
 }
 
 // --- files ---

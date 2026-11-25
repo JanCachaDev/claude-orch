@@ -2,7 +2,8 @@
   "description": "orch: guard, file tracking, cleanup, optional tests, Discord/WhatsApp notifications, budget alerts",
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.php\"" } ] }
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.php\"" } ] },
+      { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/prune.php\" --auto", "async": true } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "php -n \"${CLAUDE_PLUGIN_ROOT}/scripts/turn-start.php\"", "timeout": 10 } ] }

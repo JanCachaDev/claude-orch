@@ -27,6 +27,8 @@ const ORCH_DEFAULTS = [
     'budget'        => ['day' => null, 'week' => null],
     // USD per 1M tokens overrides: {"model-prefix": [input, output, cacheRead]}
     'prices'        => [],
+    // SessionStart hint pointing to the project's named sessions
+    'sessionHint'   => true,
 ];
 
 /**
