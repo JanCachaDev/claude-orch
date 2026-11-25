@@ -4,6 +4,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-25
+
+### Added
+- The orchestrator now picks a reasoning `effort` together with the `model` for each agent call (by level and role, escalated with the fixing worker, omitted for haiku). Override with `"efforts"` in `.claude/orch.json`; `run-log.php end --efforts=agent:effort,…` stores it in `runs.log` and `/orch:stats` shows it next to the model.
+- Context warning on every prompt (`UserPromptSubmit`): when the main session's context is at least `contextWarn` tokens (default 150000, `false` = off) it warns that an expired cache will be rewritten (with a cost estimate) or, while warm, once per 100k above the limit. Opt-in `"contextBlock": true` blocks the first prompt sent to a cold, large session until `/compact`. Only the last 512 KB of the transcript is read.
+- The named-session hint at session start shows the session's last context size and advises `/compact` after `--resume` when it is at least `contextWarn`.
+- `/orch:stats` and `/orch:global` print a `Studená cache` line (turns that rewrote 50k+ tokens, their cost and share of spend, average main context); `--json` has `cold` and `avg_ctx`.
+- Docs: README and `/orch:help` recommend starting `/orch:*` in a fresh or compacted session and Claude Code's own `"autoCompactWindow": 200000` (minimum 100000) in `~/.claude/settings.json`, which auto-compacts at that context size and is the main saving; the orch warnings cover what is left.
+
+### Changed
+- `Log start` of `/orch:run`, `/orch:backend`, `/orch:bugfix` and `/orch:parallel` is sent in the same message as the first agent call (the run id is only needed at log end), saving one main-session call per run.
+
+### Fixed
+- `run-log.php end --models=orch:planner:sonnet` logged the agent as `orch`; agent and value are now split on the last colon.
+
 ## [0.5.1] - 2026-11-25
 
 ### Added
@@ -72,7 +87,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 - `/orch:stats [days]`: token usage per agent and model, plus file stats.
 - Optional tests on the `Stop` hook (`testCommand` in `.claude/orch.json`).
 
-[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/JanCachaDev/claude-orch/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/JanCachaDev/claude-orch/compare/v0.3.0...v0.4.0

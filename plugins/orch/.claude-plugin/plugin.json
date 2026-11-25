@@ -1,6 +1,6 @@
 {
   "name": "orch",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Token-efficient agent orchestration (planner → worker → reviewer, bugfix, backend, parallel worktrees), guard against destructive commands, temp file cleanup, token & cost stats, Discord/WhatsApp notifications.",
   "author": { "name": "JanCachaDev", "url": "https://github.com/JanCachaDev" },
   "homepage": "https://github.com/JanCachaDev/claude-orch",

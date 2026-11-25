@@ -29,6 +29,10 @@ const ORCH_DEFAULTS = [
     'prices'        => [],
     // SessionStart hint pointing to the project's named sessions
     'sessionHint'   => true,
+    // warn on a prompt when the main session context is at least this many tokens (false = off)
+    'contextWarn'   => 150000,
+    // also block the first prompt sent to a cold (cache expired) large session until /compact
+    'contextBlock'  => false,
 ];
 
 /**

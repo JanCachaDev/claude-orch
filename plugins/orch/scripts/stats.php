@@ -13,7 +13,7 @@ require __DIR__ . '/lib-usage.php';
 
 $opts = getopt('', ['days:', 'project:', 'json']);
 $asJson = isset($opts['json']);
-$out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null, 'top_turns' => [],
+$out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null, 'top_turns' => [], 'cold' => null, 'avg_ctx' => 0,
     'runs' => [], 'files' => [], 'cleanup' => [], 'guard' => [], 'notify' => []];
 if ($asJson) {
     ob_start();
@@ -50,6 +50,12 @@ if (!$rows) {
         }
         print_row('CELKEM', orch_usage_sum($rows, $cfg['prices']));
     }
+    $cold = orch_cold_summary($rows, $cfg['prices'], $out['totals']['usd']);
+    $out['cold'] = ['count' => $cold['count'], 'tokens' => $cold['tokens'], 'usd' => round($cold['usd'], 4), 'share' => $cold['share']];
+    $out['avg_ctx'] = $cold['avg_ctx'];
+    echo "
+" . orch_cold_line($cold) . "
+";
     $top = orch_top_turns($rows, $cfg['prices'], 5);
     $out['top_turns'] = $top;
     if ($top) {
@@ -69,9 +75,10 @@ if ($runs) {
     printf("  %-8s %-34s %-17s %6s %8s %7s  %s\n", 'mód', 'úkol', 'verdikt', 'kola', 'čas', 'USD', 'modely');
     foreach (array_slice(array_reverse($runs), 0, 10) as $r) {
         $m = (array)($r['models'] ?? []);
+        $ef = (array)($r['efforts'] ?? []);
         printf("  %-8s %-34s %-17s %6d %8s %7.2f  %s\n", $r['mode'], cut((string)$r['task'], 34), $r['verdict'], $r['rounds'],
             orch_fmt_duration((int)$r['seconds']), (float)$r['usd'],
-            implode(' ', array_map(fn($a, $v) => "$a:$v", array_keys($m), $m)) ?: '-');
+            implode(' ', array_map(fn($a, $v) => "$a:$v" . (isset($ef[$a]) ? "/{$ef[$a]}" : ''), array_keys($m), $m)) ?: '-');
     }
     $approvedFirst = count(array_filter($runs, fn($r) => $r['verdict'] === 'APPROVED' && $r['rounds'] <= 1));
     $avgRounds = array_sum(array_column($runs, 'rounds')) / count($runs);

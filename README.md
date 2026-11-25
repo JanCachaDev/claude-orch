@@ -12,7 +12,7 @@ A token-efficient agent orchestration plugin for [Claude Code](https://code.clau
 | `/orch:bugfix <bug>` | reproduce → root cause → minimal fix + regression test → review (no planner) |
 | `/orch:backend <task>` | planner → worker → reviewer **and** DB optimizer in parallel (N+1 queries, indexes, caching) |
 | `/orch:parallel <task>` | the planner splits the task into 2–4 independent parts, workers run at the same time in separate git worktrees, then their patches are applied and reviewed |
-| `/orch:stats [days]` | tokens and **estimated USD** per agent and model, the **most expensive turns**, past runs (with models used), review stats, files, cleanup, guard (`stats.php --json` for machine-readable output) |
+| `/orch:stats [days]` | tokens and **estimated USD** per agent and model, the **most expensive turns**, past runs (with models used), cold-cache rewrites and average context, review stats, files, cleanup, guard (`stats.php --json` for machine-readable output) |
 | `/orch:global [days]` | machine-wide: disk used by `~/.claude` (transcripts, plugins, file history) and tokens + USD per project, agent and model, and the most expensive turns across all sessions |
 | `/orch:prune [days]` | frees disk space: moves session transcripts unused for N days (default 30, min 7) from all projects to `~/.claude/orch-trash`, with a preview; named sessions and job sessions are never moved, short unnamed ones (1-2 prompts) go after 1 day; `--restore-last` undoes the last batch. Runs automatically once a day for unnamed sessions (userConfig `prune_days`, default 30, 0 = off). Claude Code's own cleanup deletes named sessions too, so raise `cleanupPeriodDays` (e.g. 3650) in settings |
 | `/orch:budget` | this project's estimated spend today and this week against your limits |
@@ -31,6 +31,7 @@ These run automatically as hooks, which cost zero tokens:
 - **Budget alerts** (async, `Stop`): when a project crosses its daily or weekly USD limit, you get one Discord/WhatsApp message per period and a warning on your next prompt. Set limits for all projects in `/plugin` → `orch` → Configure (`budget_day_usd`, `budget_week_usd`) or per project with `"budget": {"day": 10, "week": 50}`.
 - **Session hint** (`SessionStart`): when the project has a named session, a one-line reminder with `claude --resume <id>`; turn off with `"sessionHint": false` in `.claude/orch.json`.
 - **Auto-prune** (async, `SessionStart`): once a day moves unused unnamed sessions (default 30 days, `prune_days`, 0 = off) to `~/.claude/orch-trash`; named, job and running sessions are never pruned; a project's `memory/` moves to the trash only when no session of that project is left.
+- **Context warning** (`UserPromptSubmit`): when the main session's context reaches `contextWarn` tokens (default 150000, `false` = off) you get a warning. If the cache has expired (idle longer than its 5-minute or 1-hour TTL) the message says the next turn rewrites the whole context and what that costs; if it is still warm, you get one note per 100k above the limit with the per-call read cost. Opt in to `"contextBlock": true` in `.claude/orch.json` to block the first prompt sent to such a cold, large session until you run `/compact` (sending the prompt again goes through; `/compact` and `/clear` are never blocked). The hook reads only the last 512 KB of the transcript. `SessionStart` adds the context size to the named-session hint and advises `/compact` after `--resume`.
 - **Update hint** (`UserPromptSubmit`): when a newer orch is installed than the one an open session loaded, the first prompt shows a one-time hint to run `/reload-plugins`.
 - **Notifications** (async): Discord and/or WhatsApp when a `/orch:*` run finishes, when a long turn ends, or when Claude is waiting for your permission.
 
@@ -65,7 +66,7 @@ Then, in each project, run `/orch:init` once (optional, recommended).
 | `orch:reviewer` | haiku, effort low | inherits project tools; Edit/Write/NotebookEdit disallowed via `disallowedTools`, the rest limited by its prompt | reviews `git diff` and returns `CATEGORIES` and `VERDICT` |
 | `orch:db-optimizer` | sonnet, effort low | inherits project tools; Edit/Write/NotebookEdit disallowed via `disallowedTools`, the rest limited by its prompt | N+1 queries, indexes, unbounded queries, transactions, caching |
 
-**Model per task:** the orchestrator rates each task as simple, normal or hard and passes `model` on every agent call. Simple tasks run the worker on haiku. Normal tasks use sonnet. Hard tasks (cross-module design, security, migrations, unclear root cause) put the planner on opus and the reviewer on sonnet. When review round 1 finds critical issues, the fixing worker is escalated one level. Pin models per project with `"models": {"worker": "sonnet"}` in `.claude/orch.json`. The models used are stored in `runs.log` and shown by `/orch:stats`.
+**Model per task:** the orchestrator rates each task as simple, normal or hard and passes `model` and `effort` on every agent call (low/medium/high by level; never on haiku, never above medium for the reviewer). Simple tasks run the worker on haiku. Normal tasks use sonnet. Hard tasks (cross-module design, security, migrations, unclear root cause) put the planner on opus and the reviewer on sonnet. When review round 1 finds critical issues, the fixing worker is escalated one level. Pin models per project with `"models": {"worker": "sonnet"}` in `.claude/orch.json`. Pin effort with `"efforts": {"worker": "high"}`. The models and efforts used are stored in `runs.log` and shown by `/orch:stats`.
 
 **Project skills and team size:** agents have no `tools:` allowlist, so they see the project's skills, MCP and plugin tools and read `CLAUDE.md`. They use the ones that fit (TDD, debugging, IDE or DB tools) and skip skills that need a conversation or that commit, push or branch. Each reports a `USED:` line, stored in `runs.log` and shown by `/orch:stats`. The team scales with the level: simple = 1 worker + 1 reviewer, normal = 1 planner + 1 worker + 1 reviewer (+1 security reviewer when relevant), hard = up to 2 planners, 4 workers and 3 reviewers (one lens each: correctness, security, tests-and-conventions). Cap them with `"team"` in `.claude/orch.json`. More agents and CLAUDE.md reading mean somewhat higher token use per call.
 
@@ -75,6 +76,11 @@ Then, in each project, run `/orch:init` once (optional, recommended).
 - Replies use a fixed, short format.
 - `maxTurns` caps each agent, and review is limited to 2 rounds.
 - Deterministic work (tests, cleanup, guard, notifications) runs in hooks, not in the model.
+
+**Context size is the real cost:** in a 30-day sample over 99 % of spend was the main session, under 0.2 % the orch agents. Large contexts (average 463k tokens) are re-read on every call, and after an idle gap beyond the cache TTL the whole context is written again, which cost about 28 % of spend. Three things help:
+- Start `/orch:*` in a fresh or freshly compacted session.
+- Set Claude Code's own `"autoCompactWindow": 200000` (minimum 100000) in `~/.claude/settings.json`. Claude Code then auto-compacts once the context reaches that size, which is the main saving; the orch warnings cover what is left.
+- Watch `/orch:stats`: the line `Studená cache` shows how many turns rewrote 50k+ tokens, what that cost and the average main context (`cold` and `avg_ctx` in `--json`).
 
 Every run is logged to `.claude/orch/runs.log` with its duration, tokens, USD, verdict, review rounds and finding categories. `/orch:stats` uses this log to show the first-try approval rate and the most common review findings, which tells you where your prompts or code need work.
 
@@ -131,8 +137,11 @@ The built-in rules are in [`guard.php`](plugins/orch/scripts/guard.php). When th
   "testTailLines": 30,
   "notify": true,
   "models": { "planner": "sonnet" },
+  "efforts": { "worker": "high" },
   "team": { "planners": 2, "workers": 4, "reviewers": 3 },
   "budget": { "day": 10, "week": 50 },
+  "contextWarn": 150000,
+  "contextBlock": false,
   "guard": { "enabled": true, "block": [], "allow": [] },
   "prices": { "claude-opus-5-5": [4.0, 20.0, 0.20] }
 }

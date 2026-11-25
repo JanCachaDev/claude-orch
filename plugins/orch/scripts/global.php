@@ -59,10 +59,13 @@ $byAgent = group_sum($allRows, 'agent');
 $byModel = group_sum($allRows, 'model');
 $totals = orch_usage_sum($allRows);
 $topTurns = orch_top_turns($allRows, [], 5);
+$cold = orch_cold_summary($allRows, [], $totals['usd']);
 
 if (isset($opts['json'])) {
     echo json_encode([
         'top_turns' => $topTurns,
+        'cold' => ['count' => $cold['count'], 'tokens' => $cold['tokens'], 'usd' => round($cold['usd'], 4), 'share' => $cold['share']],
+        'avg_ctx' => $cold['avg_ctx'],
         'days' => $days, 'home' => $home, 'disk_total' => $total, 'disk' => (object)$disk,
         'projects' => (object)$projects, 'agents' => (object)$byAgent, 'models' => (object)$byModel, 'totals' => $totals,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
@@ -96,6 +99,7 @@ if ($allRows) {
         }
         printf("%-26s %6d %9s %8s %8.2f\n", 'CELKEM', $totals['calls'], orch_fmt_tokens(tok($totals)), orch_fmt_tokens($totals['out']), $totals['usd']);
     }
+    echo "\n" . orch_cold_line($cold) . "\n";
     echo "\nNejdražší tahy ($days dní):\n";
     foreach ($topTurns as $t) {
         printf("  %7.2f USD %6d calls %8s  %s  %s  %s\n", $t['usd'], $t['calls'], orch_fmt_duration($t['to'] - $t['from']),

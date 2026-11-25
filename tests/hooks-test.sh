@@ -95,7 +95,7 @@ export CLAUDE_PLUGIN_OPTION_WHATSAPP_PHONE="+420111222333"
 export CLAUDE_PLUGIN_OPTION_WHATSAPP_APIKEY="k3y"
 ID="$(php -n "$S/run-log.php" start --mode=run --session=s1 --project="$T" --task="Add feature X")"
 check "run id printed"              '[ -n "$ID" ]'
-OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --models=orch:planner:sonnet,worker:haiku --skills="superpowers:test-driven-development,playwright,none,a b;rm" --summary="done")"
+OUT="$(php -n "$S/run-log.php" end --id="$ID" --project="$T" --verdict=APPROVED --rounds=1 --categories=bug,tests --models=orch:planner:sonnet,worker:haiku --efforts=orch:planner:medium,worker:low,reviewer:bogus --skills="superpowers:test-driven-development,playwright,none,a b;rm" --summary="done")"
 check "run end summary"             'grep -q "APPROVED, 1 rounds" <<<"$OUT"'
 check "runs.log has skills"          'grep -q "\"skills\":\[\"superpowers:test-driven-development\",\"playwright\"\]" .claude/orch/runs.log'
 check "notification queued"         '[ -f .claude/orch/notify-pending.json ]'
@@ -142,6 +142,10 @@ OUT="$(php -n "$S/stats.php" --project="$T")"
 check "stats counts writes"         'grep -q "worker 3" <<<"$OUT"'
 check "stats shows runs"            'grep -q "Add feature X" <<<"$OUT"'
 check "stats shows run models"      'grep -q "worker:haiku" <<<"$OUT"'
+check "runs.log has efforts"        'grep -q "\"efforts\":{\"planner\":\"medium\",\"worker\":\"low\"}" "$T/.claude/orch/runs.log"'
+check "runs.log models strip orch:" 'grep -q "\"models\":{\"planner\":\"sonnet\",\"worker\":\"haiku\"}" "$T/.claude/orch/runs.log"'
+check "invalid effort dropped"      '! grep -q "bogus" "$T/.claude/orch/runs.log"'
+check "stats shows run efforts"     'grep -q "worker:haiku/low" <<<"$OUT"'
 check "stats shows skills"           'grep -q "Použité skills: superpowers:test-driven-development (1)" <<<"$OUT"'
 check "stats shows guard"           'grep -q "Pojistka zablokovala" <<<"$OUT"'
 JOUT="$(php -n "$S/stats.php" --project="$T" --json)"
@@ -342,6 +346,46 @@ check "no installed file → silent"  '[ -z "$TS5" ]'
 VOUT="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline)"
 check "no installed → update advice" 'grep -q "nainstalováno: *?" <<<"$VOUT" && grep -q "claude plugin update" <<<"$VOUT"'
 check "remote lookup has timeout"   'start=$(date +%s); php -n -r "require \"$SW/lib-version.php\"; orch_remote_version(1);" >/dev/null; [ $(( $(date +%s) - start )) -le 4 ]'
+
+echo "== context warning"
+CP="$T/cp"; mkdir -p "$CP"; CT="$T/ctx.jsonl"
+asst(){ echo "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"$(date -u -d "$1 seconds ago" +%Y-%m-%dT%H:%M:%S.000Z)\",\"message\":{\"id\":\"m$RANDOM\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":$2,\"cache_read_input_tokens\":$3,\"output_tokens\":5,\"cache_creation\":{\"ephemeral_1h_input_tokens\":$2,\"ephemeral_5m_input_tokens\":0}}}}"; }
+ctxp(){ echo "{\"session_id\":\"$1\",\"transcript_path\":\"$CT\",\"prompt\":\"${2:-hello}\"}" | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$CP" php -n "$S/turn-start.php"; }
+asst 7200 1000 199000 > "$CT"
+C1="$(ctxp c1)"
+check "cold → cache expired warning" 'grep -q "cache vypršela (120 min), kontext 200.0k" <<<"$C1" && grep -q "~\$1.60" <<<"$C1" && grep -q systemMessage <<<"$C1"'
+check "cold, no block by default"    '! grep -q "\"decision\"" <<<"$C1"'
+echo '{"contextWarn":false}' > "$CP/.claude/orch.json"
+check "contextWarn false → silent"   '[ -z "$(ctxp c2)" ]'
+echo '{"contextWarn":300000}' > "$CP/.claude/orch.json"
+check "below limit → silent"         '[ -z "$(ctxp c3)" ]'
+rm "$CP/.claude/orch.json"
+asst 60 1000 249000 > "$CT"
+W1="$(ctxp c4)"; W2="$(ctxp c4)"
+check "warm → context warning"       'grep -q "kontext 250.0k: každé volání čte 250.0k" <<<"$W1" && grep -q "zvaž .*compact" <<<"$W1"'
+check "warm warning once per band"   '[ -z "$W2" ]'
+asst 60 1000 349000 > "$CT"
+check "next 100k band warns again"   'grep -q "kontext 350.0k" <<<"$(ctxp c4)"'
+echo '{"contextBlock":true}' > "$CP/.claude/orch.json"
+asst 7200 1000 199000 > "$CT"
+B1="$(ctxp c5)"; B2="$(ctxp c5)"
+check "contextBlock blocks cold"     'grep -q "\"decision\":\"block\"" <<<"$B1" && grep -q "/compact" <<<"$B1"'
+check "second try passes through"    '! grep -q "\"decision\"" <<<"$B2"'
+asst 7200 1000 199000 > "$CT"
+check "/compact never blocked"       '! grep -q "\"decision\"" <<<"$(ctxp c6 "/compact")"'
+rm "$CP/.claude/orch.json"
+echo '{"session_id":"c7","transcript_path":"'"$T"'/missing.jsonl"}' | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$CP" php -n "$S/turn-start.php"
+check "missing transcript → exit 0"  '[ $? -eq 0 ]'
+{ asst 7200 1000 199000; echo '{"type":"user","isCompactSummary":true,"message":{"content":"summary"}}'; } > "$CT"
+check "after compact → silent"       '[ -z "$(ctxp c8)" ]'
+head -c 3000000 /dev/zero | tr '\0' 'x' > "$T/big.jsonl"; echo >> "$T/big.jsonl"; asst 7200 1000 199000 >> "$T/big.jsonl"
+check "big transcript tail read"     'php -n -r "require \"$SW/lib-usage.php\"; \$c = orch_last_context(\"$T/big.jsonl\"); exit(\$c && \$c[\"ctx\"] === 200002 && \$c[\"ttl\"] === 3600 ? 0 : 1);"'
+CH="$T/home6"; CSL="$(php -n -r 'echo preg_replace("/[^A-Za-z0-9]/","-",$argv[1]);' "$CP")"; mkdir -p "$CH/projects/$CSL"
+{ asst 7200 1000 199000; echo '{"type":"custom-title","customTitle":"big work","sessionId":"nb"}'; } > "$CH/projects/$CSL/nb.jsonl"
+CS="$(echo '{"session_id":"new9","source":"startup","transcript_path":"'"$CH/projects/$CSL/new9.jsonl"'","cwd":"'"$CP"'"}' | CLAUDE_CONFIG_DIR="$CH" CLAUDE_PROJECT_DIR="$CP" php -n "$S/session-start.php")"
+check "resume hint has context size" 'grep -q "claude --resume nb (kontext 200.0k; po --resume nejdřív /compact" <<<"$CS"'
+check "stats cold line"              'grep -q "Studená cache" <<<"$(cd "$T" && CLAUDE_CONFIG_DIR="$CH" php -n "$S/stats.php" --days=1 --project="$CP")"'
+check "stats --json cold + avg_ctx"  'CLAUDE_CONFIG_DIR="$CH" php -n "$S/stats.php" --days=1 --project="$CP" --json | grep -q "\"avg_ctx\": 200002"'
 
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

@@ -213,3 +213,111 @@ function orch_fmt_duration(int $s): string
     return $s >= 3600 ? sprintf('%dh %02dm', intdiv($s, 3600), intdiv($s % 3600, 60))
         : ($s >= 60 ? sprintf('%dm %02ds', intdiv($s, 60), $s % 60) : "{$s}s");
 }
+
+const ORCH_CONTEXT_TAIL = 524288;
+
+/**
+ * Context size of the main session from the LAST assistant call, read from the final 512 KB of its transcript only
+ * (never the whole file). ctx = input + cache write + cache read; ttl = 3600 when the newest cache write used the
+ * 1 h cache, else 300. Null when nothing usable is found or when the context was just compacted (the old
+ * size no longer applies). Never throws.
+ * @return array{ts:int, ctx:int, ttl:int, model:string}|null
+ */
+function orch_last_context(string $transcript): ?array
+{
+    try {
+        $fh = @fopen($transcript, 'r');
+        if (!$fh) {
+            return null;
+        }
+        $size = (int)@filesize($transcript);
+        $partial = $size > ORCH_CONTEXT_TAIL;
+        if ($partial) {
+            fseek($fh, $size - ORCH_CONTEXT_TAIL);
+        }
+        $buf = (string)stream_get_contents($fh);
+        fclose($fh);
+        $lines = explode("\n", $buf);
+        if ($partial) {
+            array_shift($lines); // starts mid-line
+        }
+        $last = null;
+        $ttl = null;
+        for ($i = count($lines) - 1; $i >= 0; $i--) {
+            $line = $lines[$i];
+            if ($last === null && (str_contains($line, '"isCompactSummary":true') || str_contains($line, '"subtype":"compact_boundary"'))) {
+                return null;
+            }
+            if (!str_contains($line, '"usage"') || !str_contains($line, '"type":"assistant"') || str_contains($line, '"isSidechain":true')) {
+                continue;
+            }
+            $j = json_decode($line, true);
+            $u = is_array($j) ? ($j['message']['usage'] ?? null) : null;
+            if (!is_array($u)) {
+                continue;
+            }
+            $cw = (int)($u['cache_creation_input_tokens'] ?? 0);
+            if ($last === null) {
+                $ctx = (int)($u['input_tokens'] ?? 0) + $cw + (int)($u['cache_read_input_tokens'] ?? 0);
+                $ts = isset($j['timestamp']) ? (int)strtotime((string)$j['timestamp']) : 0;
+                if ($ctx <= 0 || $ts <= 0) {
+                    continue;
+                }
+                $last = ['ts' => $ts, 'ctx' => $ctx, 'model' => (string)($j['message']['model'] ?? '')];
+            }
+            if ($cw > 0) { // the newest call that wrote cache tells which TTL is in use
+                $ttl = (int)($u['cache_creation']['ephemeral_1h_input_tokens'] ?? 0) > 0 ? 3600 : 300;
+                break;
+            }
+        }
+        return $last === null ? null : $last + ['ttl' => $ttl ?? 300];
+    } catch (Throwable) {
+        return null;
+    }
+}
+
+/**
+ * Main-agent calls that wrote >= $min tokens to the cache at once (a cold cache rewritten after an idle gap).
+ * usd = cost of those cache writes only.
+ * @return array{count:int, tokens:int, usd:float}
+ */
+function orch_cold_rewrites(array $rows, array $prices = [], int $min = 50000): array
+{
+    $res = ['count' => 0, 'tokens' => 0, 'usd' => 0.0];
+    foreach ($rows as $r) {
+        if (($r['agent'] ?? '') !== 'main' || $r['u']['cw5'] + $r['u']['cw1h'] < $min) {
+            continue;
+        }
+        $res['count']++;
+        $res['tokens'] += $r['u']['cw5'] + $r['u']['cw1h'];
+        $res['usd'] += orch_cost($r['model'], ['cw5' => $r['u']['cw5'], 'cw1h' => $r['u']['cw1h']], $prices) ?? 0.0;
+    }
+    return $res;
+}
+
+/** Average context (in + cache write + cache read) of main-agent calls; 0 when there are none. */
+function orch_avg_context(array $rows): int
+{
+    $sum = 0;
+    $n = 0;
+    foreach ($rows as $r) {
+        if (($r['agent'] ?? '') === 'main') {
+            $sum += $r['u']['in'] + $r['u']['cw5'] + $r['u']['cw1h'] + $r['u']['cread'];
+            $n++;
+        }
+    }
+    return $n ? intdiv($sum, $n) : 0;
+}
+
+/** "Studená cache" report line shared by stats.php and global.php, plus the numbers for --json. */
+function orch_cold_summary(array $rows, array $prices, float $totalUsd): array
+{
+    $c = orch_cold_rewrites($rows, $prices);
+    return $c + ['share' => $totalUsd > 0 ? round(100 * $c['usd'] / $totalUsd, 1) : 0.0, 'avg_ctx' => orch_avg_context($rows)];
+}
+
+function orch_cold_line(array $c): string
+{
+    return sprintf('Studená cache: %d tahů přepsalo >=50k, $%.2f (%d %% útraty); průměrný kontext main %s',
+        $c['count'], $c['usd'], round($c['share']), orch_fmt_tokens($c['avg_ctx']));
+}

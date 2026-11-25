@@ -5,6 +5,22 @@ declare(strict_types=1);
 require __DIR__ . '/common.php';
 require_once __DIR__ . '/lib-sessions.php';
 
+/** " (kontext 337k; po --resume nejdřív /compact)" for a session whose last context is known, else "". */
+function orch_resume_context(string $home, string $slug, string $sid, array $cfg): string
+{
+    try {
+        $c = orch_last_context("$home/projects/$slug/$sid.jsonl");
+        if ($c === null) {
+            return '';
+        }
+        $limit = $cfg['contextWarn'] ?? 150000;
+        $big = is_numeric($limit) && (int)$limit > 0 && $c['ctx'] >= (int)$limit;
+        return ' (kontext ' . orch_fmt_tokens($c['ctx']) . ($big ? '; po --resume nejdřív /compact, resume je vždy studený start' : '') . ')';
+    } catch (Throwable) {
+        return '';
+    }
+}
+
 try {
     $in = orch_read_input();
     $session = orch_session_id($in);
@@ -17,7 +33,7 @@ try {
             @file_put_contents($file, (string)time());
         }
     }
-    if (($in['source'] ?? '') === 'startup' && (orch_config($project)['sessionHint'] ?? true) !== false) {
+    if (($in['source'] ?? '') === 'startup' && ($cfg = orch_config($project))['sessionHint'] !== false) {
         $tp = is_string($in['transcript_path'] ?? null) ? orch_norm($in['transcript_path']) : '';
         $slug = $tp !== '' ? basename(dirname($tp)) : '';
         if ($slug === '' || $slug === '.') {
@@ -26,14 +42,14 @@ try {
         }
         if ($slug !== '') {
             $mine = array_filter(
-                orch_named_sessions(orch_claude_home(), $slug),
+                orch_named_sessions($home = orch_claude_home(), $slug),
                 fn($s, $sid) => $sid !== $session && strcasecmp($s['slug'], $slug) === 0,
                 ARRAY_FILTER_USE_BOTH
             );
             uasort($mine, fn($a, $b) => $b['mtime'] <=> $a['mtime']);
             $parts = [];
             foreach (array_slice($mine, 0, 3, true) as $sid => $s) {
-                $parts[] = "„{$s['name']}“ — pokračuj v něm: claude --resume $sid";
+                $parts[] = "„{$s['name']}“ — pokračuj v něm: claude --resume $sid" . orch_resume_context($home, $s['slug'], $sid, $cfg);
             }
             if ($parts) {
                 $msg = 'orch: v tomhle projektu máš pojmenované sezení ' . implode(' | ', $parts);

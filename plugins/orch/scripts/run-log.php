@@ -64,9 +64,20 @@ switch ($cmd) {
             fn($c) => $c !== '' && $c !== 'none')));
         $models = [];
         foreach (explode(',', (string)($opts['models'] ?? '')) as $pair) {
-            [$a, $m] = array_map('trim', explode(':', $pair, 2)) + [1 => ''];
+            $pos = strrpos($pair, ':'); // agent names may carry the orch: prefix, so split on the last colon
+            $a = $pos === false ? '' : trim(substr($pair, 0, $pos));
+            $m = $pos === false ? '' : trim(substr($pair, $pos + 1));
             if ($a !== '' && $m !== '' && preg_match('/^[\w.:-]+$/', "$a$m")) {
                 $models[preg_replace('/^orch:/', '', $a)] = strtolower($m);
+            }
+        }
+        $efforts = [];
+        foreach (explode(',', (string)($opts['efforts'] ?? '')) as $pair) {
+            $pos = strrpos($pair, ':');
+            $a = $pos === false ? '' : trim(substr($pair, 0, $pos));
+            $e = $pos === false ? '' : strtolower(trim(substr($pair, $pos + 1)));
+            if ($a !== '' && preg_match('/^[\w.:-]+$/', $a) && in_array($e, ['low', 'medium', 'high', 'xhigh', 'max'], true)) {
+                $efforts[preg_replace('/^orch:/', '', $a)] = $e;
             }
         }
         $skills = array_values(array_unique(array_filter(array_map('trim', explode(',', (string)($opts['skills'] ?? ''))),
@@ -75,7 +86,7 @@ switch ($cmd) {
             'id' => $id, 'event' => 'end', 'ts' => date('c'), 'epoch' => $now,
             'session' => $sess ?: null, 'mode' => $start['mode'], 'task' => $start['task'],
             'seconds' => $now - (int)$start['epoch'], 'verdict' => $verdict, 'rounds' => $rounds,
-            'categories' => $cats, 'models' => (object)$models, 'skills' => $skills, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
+            'categories' => $cats, 'models' => (object)$models, 'efforts' => (object)$efforts, 'skills' => $skills, 'summary' => substr(trim((string)($opts['summary'] ?? '')), 0, 300),
             'tokens' => ['calls' => $sum['calls'], 'in' => $sum['in'] + $sum['cw5'] + $sum['cw1h'] + $sum['cread'], 'out' => $sum['out']],
             'usd' => round($sum['usd'], 4),
         ];
