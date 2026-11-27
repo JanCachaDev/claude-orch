@@ -8,15 +8,24 @@ declare(strict_types=1);
  */
 require __DIR__ . '/common.php';
 
+/** `git` plus optional global options (`-C <dir>`, `-c k=v`, quoted or not) before the subcommand. */
+const ORCH_GIT = '(?:^|[\s;&|])git(?:\s+-[Cc]\s+(?:"[^"]*"|\'[^\']*\'|[^\s;&|]+))*\s+';
+/** A pathspec meaning the whole tree: `.`, `./`, `:/`, `:/.`, `:(top)`, optionally quoted. */
+const ORCH_GIT_ALL = '["\']?(?:\.|\./|:/|:/\.|:\(top\)\.?)["\']?(?=$|[\s;&|])';
+
 const ORCH_GUARD_RULES = [
     // rm -r on root, home, cwd, parent or wildcard-everything
     '(?:^|[\s;&|(])rm\s+(?:-\S+\s+)*-[a-z]*r[a-z]*\s+(?:-\S+\s+)*(?:\S+\s+)*?(?:/|/\*|~|~/|~/\*|\*|\.|\./|\./\*|\.\.|\.\./?|\$HOME/?|"\$HOME"/?)(?=$|[\s;&|)])'
         => 'rm -r on /, ~, ., .. or *',
-    '(?:^|[\s;&|])git\s+push\b(?=.*\s(?:--force(?!-with-lease)\b|-f\b|\+\S+))' => 'git force push (use --force-with-lease if really needed)',
-    '(?:^|[\s;&|])git\s+reset\s+(?:\S+\s+)*--hard\b'          => 'git reset --hard discards uncommitted work',
-    '(?:^|[\s;&|])git\s+clean\s+(?:\S+\s+)*-[a-z]*f'          => 'git clean -f deletes untracked files',
-    '(?:^|[\s;&|])git\s+(?:checkout|restore)\s+(?:--\s+)?\.(?=$|[\s;&|])' => 'discards all uncommitted changes',
-    '(?:^|[\s;&|])git\s+stash\s+(?:drop|clear)\b'             => 'drops stashed work',
+    ORCH_GIT . 'push\b(?=.*\s(?:--force(?!-with-lease)\b|-f\b|\+\S+))' => 'git force push (use --force-with-lease if really needed)',
+    ORCH_GIT . 'reset\s+(?:\S+\s+)*--hard\b'          => 'git reset --hard discards uncommitted work',
+    ORCH_GIT . 'clean\s+(?:\S+\s+)*-[a-z]*f'          => 'git clean -f deletes untracked files',
+    ORCH_GIT . '(?:checkout|restore)\s+(?:--\s+)?' . ORCH_GIT_ALL => 'discards all uncommitted changes',
+    ORCH_GIT . 'checkout\s+(?:-\S+\s+)*(?:HEAD|@)\s+(?:--\s+)?' . ORCH_GIT_ALL => 'discards all uncommitted changes',
+    ORCH_GIT . 'restore\s+(?:[^\s;&|]+\s+)*?(?:--worktree|-[a-z]*W[a-z]*|--source(?:=|\s+)[^\s;&|]+)\s+(?:[^\s;&|]+\s+)*?' . ORCH_GIT_ALL => 'discards all uncommitted changes',
+    ORCH_GIT . '(?:checkout|switch)\s+(?:[^\s;&|]+\s+)*?(?:-f|--force|--discard-changes)(?=$|[\s;&|])' => 'git checkout/switch --force discards uncommitted work',
+    'Remove-Item\b(?=[^;&|]*-Recurse)(?=[^;&|]*\s(?:\*|\.[\\/]?|\.[\\/]\*)(?=$|[\s;"\']))' => 'Remove-Item -Recurse on the whole project',
+    ORCH_GIT . 'stash\s+(?:drop|clear)\b'             => 'drops stashed work',
     '\b(?:drop\s+(?:table|database|schema)|truncate\s+(?:table\s+)?[`"\w.]+\s*(?:;|$|["\']))' => 'DROP/TRUNCATE SQL',
     '\bdelete\s+from\s+[`"\w.]+\s*(?:;|$|["\'])'              => 'DELETE without WHERE',
     '\bmkfs(?:\.\w+)?\b|\bdd\s+if=|\bformat\s+[a-z]:'         => 'disk formatting / raw disk write',
@@ -35,7 +44,9 @@ function orch_guard_check(string $cmd, array $cfg): ?string
         return null;
     }
     foreach ((array)($g['allow'] ?? []) as $re) {
-        if (@preg_match('~' . str_replace('~', '\~', (string)$re) . '~i', $cmd) === 1) {
+        $r = @preg_match('~' . str_replace('~', '\~', (string)$re) . '~i', $cmd);
+        $r === false && $GLOBALS['orch_guard_bad'][(string)$re] = true;
+        if ($r === 1) {
             return null;
         }
     }
@@ -44,7 +55,9 @@ function orch_guard_check(string $cmd, array $cfg): ?string
         $rules[(string)$re] = 'blocked by project guard rule';
     }
     foreach ($rules as $re => $why) {
-        if (@preg_match('~' . str_replace('~', '\~', (string)$re) . '~i', $cmd) === 1) {
+        $r = @preg_match('~' . str_replace('~', '\~', (string)$re) . '~i', $cmd);
+        $r === false && $GLOBALS['orch_guard_bad'][(string)$re] = true; // invalid user regex: reported, never fatal
+        if ($r === 1) {
             return $why;
         }
     }
@@ -56,6 +69,9 @@ $opts = getopt('', ['check:', 'project:']);
 if (isset($opts['check'])) {
     $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_project_dir();
     $why = orch_guard_check((string)$opts['check'], orch_config($project));
+    foreach (array_keys($GLOBALS['orch_guard_bad'] ?? []) as $bad) {
+        fwrite(STDERR, "orch guard: invalid regex in .claude/orch.json, ignored: $bad\n");
+    }
     echo $why === null ? "ok\n" : "BLOCK: $why\n";
     exit($why === null ? 0 : 1);
 }
@@ -68,22 +84,37 @@ try {
     }
     $project = orch_project_dir($in);
     $why = orch_guard_check($cmd, orch_config($project));
+    orch_guard_report_bad(orch_state_dir($project));
     if ($why !== null) {
         orch_append_jsonl(orch_state_dir($project) . '/guard.log', [
             'ts' => date('c'), 'session' => $in['session_id'] ?? null, 'agent' => $in['agent_type'] ?? 'main',
-            'reason' => $why, 'command' => mb_substr_safe($cmd, 300),
+            'reason' => $why, 'command' => orch_cut($cmd, 300, '…'),
         ]);
         echo json_encode(['hookSpecificOutput' => [
             'hookEventName'            => 'PreToolUse',
             'permissionDecision'       => 'deny',
             'permissionDecisionReason' => "orch guard: $why. Use a safer alternative or ask the user to run it.",
-        ]], JSON_UNESCAPED_SLASHES);
+        ]], ORCH_JSON | JSON_PARTIAL_OUTPUT_ON_ERROR);
     }
 } catch (Throwable) {
 }
 exit(0);
 
-function mb_substr_safe(string $s, int $n): string
+/** Logs each invalid user regex once (state/guard-bad.json remembers which) so a typo does not silently disable a rule. */
+function orch_guard_report_bad(string $state): void
 {
-    return strlen($s) <= $n ? $s : substr($s, 0, $n) . '…';
+    $bad = array_keys($GLOBALS['orch_guard_bad'] ?? []);
+    if (!$bad) {
+        return;
+    }
+    $file = "$state/guard-bad.json";
+    $known = json_decode((string)@file_get_contents($file), true);
+    $known = is_array($known) ? $known : [];
+    $new = array_diff($bad, $known);
+    foreach ($new as $re) {
+        orch_append_jsonl("$state/guard.log", ['ts' => date('c'), 'reason' => 'invalid guard regex in orch.json (ignored)', 'regex' => orch_cut($re, 200, '…')]);
+    }
+    if ($new) {
+        @file_put_contents($file, json_encode(array_values(array_unique(array_merge($known, $bad))), ORCH_JSON));
+    }
 }

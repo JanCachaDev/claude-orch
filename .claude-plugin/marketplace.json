@@ -8,7 +8,7 @@
     {
       "name": "orch",
       "source": "./plugins/orch",
-      "description": "Planner → worker → reviewer loop, temp file tracking & cleanup, token stats."
+      "description": "Modes: run, bugfix, backend (DB review), parallel (git worktrees), plus plan, review and fix usable by agents. Guard, temp file cleanup, token and cost stats, notifications."
     }
   ]
 }

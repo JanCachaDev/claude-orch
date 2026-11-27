@@ -15,7 +15,8 @@ function orch_resume_context(string $home, string $slug, string $sid, array $cfg
         }
         $limit = $cfg['contextWarn'] ?? 150000;
         $big = is_numeric($limit) && (int)$limit > 0 && $c['ctx'] >= (int)$limit;
-        return ' (kontext ' . orch_fmt_tokens($c['ctx']) . ($big ? '; po --resume nejdřív /compact, resume je vždy studený start' : '') . ')';
+        return orch_t(' (kontext ', ' (context ') . orch_fmt_tokens($c['ctx'])
+            . ($big ? orch_t('; po --resume nejdřív /compact, resume je vždy studený start', '; after --resume run /compact first, a resume is always a cold start') : '') . ')';
     } catch (Throwable) {
         return '';
     }
@@ -25,6 +26,12 @@ try {
     $in = orch_read_input();
     $session = orch_session_id($in);
     $project = orch_project_dir($in);
+    $messages = [];
+    orch_lang_init($project, $session); // no prompt yet: the session's marker (resume), else the project's newest one
+    if (($err = orch_config_error($project)) !== null) {
+        $messages[] = orch_t("orch: .claude/orch.json není platný JSON ($err) — používám výchozí hodnoty, oprav ho.",
+            "orch: .claude/orch.json is not valid JSON ($err) — using the defaults, fix it.");
+    }
     if ($session !== '') {
         $dir = orch_state_dir($project) . '/sessions';
         @mkdir($dir, 0777, true);
@@ -49,13 +56,16 @@ try {
             uasort($mine, fn($a, $b) => $b['mtime'] <=> $a['mtime']);
             $parts = [];
             foreach (array_slice($mine, 0, 3, true) as $sid => $s) {
-                $parts[] = "„{$s['name']}“ — pokračuj v něm: claude --resume $sid" . orch_resume_context($home, $s['slug'], $sid, $cfg);
+                $parts[] = orch_t("„{$s['name']}“ — pokračuj v něm: claude --resume $sid", "\"{$s['name']}\" — continue it: claude --resume $sid")
+                    . orch_resume_context($home, $s['slug'], $sid, $cfg);
             }
             if ($parts) {
-                $msg = 'orch: v tomhle projektu máš pojmenované sezení ' . implode(' | ', $parts);
-                echo json_encode(['systemMessage' => $msg], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $messages[] = orch_t('orch: v tomhle projektu máš pojmenované sezení ', 'orch: named session in this project: ') . implode(' | ', $parts);
             }
         }
+    }
+    if ($messages) {
+        echo json_encode(['systemMessage' => implode("\n", $messages)], ORCH_JSON | JSON_PARTIAL_OUTPUT_ON_ERROR);
     }
 } catch (Throwable) {
 }

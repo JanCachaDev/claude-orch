@@ -11,10 +11,10 @@ declare(strict_types=1);
  */
 require __DIR__ . '/lib-usage.php';
 
-$opts = getopt('', ['days:', 'project:', 'json']);
+$opts = getopt('', ['days:', 'project:', 'json', 'session:']);
 $asJson = isset($opts['json']);
 $out = ['days' => 0, 'project' => '', 'sessions' => 0, 'agents' => [], 'models' => [], 'totals' => null, 'top_turns' => [], 'cold' => null, 'avg_ctx' => 0,
-    'runs' => [], 'files' => [], 'cleanup' => [], 'guard' => [], 'notify' => []];
+    'runs' => [], 'storage' => [], 'files' => [], 'cleanup' => [], 'guard' => [], 'notify' => []];
 if ($asJson) {
     ob_start();
 }
@@ -23,20 +23,22 @@ $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_
 $since = time() - $days * 86400;
 $cfg = orch_config($project);
 $state = "$project/.claude/orch";
+orch_lang_init($project, (string)($opts['session'] ?? ''), $cfg);
 
-$rows = orch_usage_messages($project, $since);
+$uopts = ['prompts' => true];
+$rows = orch_usage_messages($project, $since, $uopts);
 
-echo "orch stats — posledních $days dní — " . basename($project) . "\n";
+echo orch_t("orch stats — posledních $days dní — ", "orch stats — last $days days — ") . basename($project) . "\n";
 
 // --- tokens ---
 if (!$rows) {
-    echo "\nŽádné přepisy sezení" . (orch_transcript_dir($project) ? '' : ' (adresář nenalezen)') . ".\n";
+    echo orch_t("\nŽádné přepisy sezení", "\nNo session transcripts") . (orch_transcript_dir($project) ? '' : orch_t(' (adresář nenalezen)', ' (directory not found)')) . ".\n";
 } else {
     $sessions = count(array_unique(array_column($rows, 'session')));
     $out['sessions'] = $sessions;
     $out['totals'] = orch_usage_sum($rows, $cfg['prices']);
-    echo "Sezení: $sessions\n";
-    foreach (['agent' => 'Podle agenta', 'model' => 'Podle modelu'] as $key => $title) {
+    echo orch_t("Sezení: $sessions\n", "Sessions: $sessions\n");
+    foreach (['agent' => orch_t('Podle agenta', 'By agent'), 'model' => orch_t('Podle modelu', 'By model')] as $key => $title) {
         $groups = [];
         foreach ($rows as $r) {
             $groups[$r[$key]][] = $r;
@@ -48,7 +50,7 @@ if (!$rows) {
         foreach ($sums as $name => $s) {
             print_row((string)$name, $s);
         }
-        print_row('CELKEM', orch_usage_sum($rows, $cfg['prices']));
+        print_row(orch_t('CELKEM', 'TOTAL'),orch_usage_sum($rows, $cfg['prices']));
     }
     $cold = orch_cold_summary($rows, $cfg['prices'], $out['totals']['usd']);
     $out['cold'] = ['count' => $cold['count'], 'tokens' => $cold['tokens'], 'usd' => round($cold['usd'], 4), 'share' => $cold['share']];
@@ -59,7 +61,7 @@ if (!$rows) {
     $top = orch_top_turns($rows, $cfg['prices'], 5);
     $out['top_turns'] = $top;
     if ($top) {
-        echo "\nNejdražší tahy:\n";
+        echo orch_t("\nNejdražší tahy:\n", "\nMost expensive turns:\n");
         foreach ($top as $t) {
             printf("  %7.2f USD %6d calls %8s  %s  %s\n", $t['usd'], $t['calls'], orch_fmt_duration($t['to'] - $t['from']),
                 date('m-d H:i', $t['from']), cut($t['prompt'], 60));
@@ -71,8 +73,9 @@ if (!$rows) {
 $runs = array_values(array_filter(orch_read_jsonl("$state/runs.log"), fn($r) => ($r['event'] ?? '') === 'end' && ($r['epoch'] ?? 0) >= $since));
 $out['runs'] = $runs;
 if ($runs) {
-    echo "\nBěhy orchestrace (" . count($runs) . "):\n";
-    printf("  %-8s %-34s %-17s %6s %8s %7s  %s\n", 'mód', 'úkol', 'verdikt', 'kola', 'čas', 'USD', 'modely');
+    echo orch_t("\nBěhy orchestrace (", "\nOrchestration runs (") . count($runs) . "):\n";
+    printf("  %-8s %-34s %-17s %6s %8s %7s  %s\n", orch_t('mód', 'mode'), orch_t('úkol', 'task'), orch_t('verdikt', 'verdict'),
+        orch_t('kola', 'rounds'), orch_t('čas', 'time'), 'USD', orch_t('modely', 'models'));
     foreach (array_slice(array_reverse($runs), 0, 10) as $r) {
         $m = (array)($r['models'] ?? []);
         $ef = (array)($r['efforts'] ?? []);
@@ -90,10 +93,10 @@ if ($runs) {
         }
     }
     arsort($cats);
-    printf("Review: schváleno na 1. pokus %d %%, průměrně %.1f kol, ~$%.2f za běh\n",
+    printf(orch_t("Review: schváleno na 1. pokus %d %%, průměrně %.1f kol, ~$%.2f za běh\n", "Review: approved on the 1st try %d %%, %.1f rounds on average, ~$%.2f per run\n"),
         round(100 * $approvedFirst / count($runs)), $avgRounds, $avgUsd);
     if ($cats) {
-        echo 'Nejčastější nálezy: ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($cats), $cats)) . "\n";
+        echo orch_t('Nejčastější nálezy: ', 'Most common findings: ') . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($cats), $cats)) . "\n";
     }
     $skillCounts = [];
     foreach ($runs as $r) {
@@ -103,7 +106,7 @@ if ($runs) {
     }
     arsort($skillCounts);
     if ($skillCounts) {
-        echo 'Použité skills: ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($skillCounts), $skillCounts)) . "\n";
+        echo orch_t('Použité skills: ', 'Skills used: ') . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($skillCounts), $skillCounts)) . "\n";
     }
 }
 
@@ -134,10 +137,22 @@ arsort($written);
 $trashDirs = count(glob("$state/trash/*", GLOB_ONLYDIR) ?: []);
 $out['files'] = ['writes' => array_sum($written), 'temporary' => $tmpWritten, 'by_agent' => $written];
 $out['cleanup'] = ['moved' => $moved, 'bytes' => $movedBytes, 'restored' => $restored, 'trash_dirs' => $trashDirs];
-echo "\nSoubory (Write): " . array_sum($written) . " zápisů, dočasných $tmpWritten"
+echo orch_t("\nSoubory (Write): ", "\nFiles (Write): ") . array_sum($written) . orch_t(" zápisů, dočasných $tmpWritten", " writes, $tmpWritten temporary")
     . ($written ? ' — ' . implode(', ', array_map(fn($k, $v) => "$k $v", array_keys($written), $written)) : '') . "\n";
-printf("Úklid: %d souborů do koše (%s B), obnoveno %d, košů na disku %d\n",
+printf(orch_t("Úklid: %d souborů do koše (%s B), obnoveno %d, košů na disku %d\n", "Cleanup: %d files to trash (%s B), %d restored, %d trash batches on disk\n"),
     $moved, orch_fmt_tokens($movedBytes), $restored, count(glob("$state/trash/*", GLOB_ONLYDIR) ?: []));
+
+// --- storage ---
+$home = orch_claude_home();
+$storage = [];
+foreach ([['orch', "$project/.claude/orch"], ['orch_trash', "$project/.claude/orch/trash"], ['worktrees', "$project/.claude/worktrees"],
+          ['prune_trash', "$home/orch-trash"]] as [$k, $p]) {
+    $storage[$k] = orch_dir_size($p)['bytes'];
+}
+$storage['orch'] = max(0, $storage['orch'] - $storage['orch_trash']); // the trash is a subfolder of .claude/orch: report it separately
+$out['storage'] = $storage;
+echo orch_t('Úložiště: ', 'Storage: ') . '.claude/orch ' . orch_fmt_bytes($storage['orch']) . orch_t(', koš ', ', trash ') . orch_fmt_bytes($storage['orch_trash'])
+    . ', worktrees ' . orch_fmt_bytes($storage['worktrees']) . ', ~/.claude/orch-trash ' . orch_fmt_bytes($storage['prune_trash']) . "\n";
 
 // --- guard / notify ---
 $blocks = array_filter(orch_read_jsonl("$state/guard.log"), fn($r) => strtotime((string)$r['ts']) >= $since);
@@ -145,13 +160,14 @@ $why = $blocks ? array_count_values(array_column($blocks, 'reason')) : [];
 arsort($why);
 $out['guard'] = ['blocked' => count($blocks), 'by_reason' => $why];
 if ($blocks) {
-    echo 'Pojistka zablokovala: ' . count($blocks) . ' — ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($why), $why)) . "\n";
+    echo orch_t('Pojistka zablokovala: ', 'Guard blocked: ') . count($blocks) . ' — ' . implode(', ', array_map(fn($k, $v) => "$k ($v)", array_keys($why), $why)) . "\n";
 }
 $notes = array_filter(orch_read_jsonl("$state/notify.log"), fn($r) => strtotime((string)$r['ts']) >= $since);
 $fail = count(array_filter($notes, fn($r) => in_array(true, array_map(fn($v) => $v !== 'ok', $r['results'] ?? []), true)));
 $out['notify'] = ['sent' => count($notes), 'failed' => $fail];
 if ($notes) {
-    echo 'Notifikace: ' . count($notes) . " odesláno" . ($fail ? ", $fail s chybou (viz .claude/orch/notify.log)" : '') . "\n";
+    echo orch_t('Notifikace: ', 'Notifications: ') . count($notes) . orch_t(' odesláno', ' sent')
+        . ($fail ? orch_t(", $fail s chybou (viz .claude/orch/notify.log)", ", $fail failed (see .claude/orch/notify.log)") : '') . "\n";
 }
 
 if ($asJson) {
@@ -163,7 +179,7 @@ if ($asJson) {
     $out['models'] = (object)$out['models'];
     $out['files']['by_agent'] = (object)$out['files']['by_agent'];
     $out['guard']['by_reason'] = (object)$out['guard']['by_reason'];
-    echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
+    echo json_encode($out, ORCH_JSON | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
 }
 
 function print_row(string $name, array $s): void
@@ -175,5 +191,5 @@ function print_row(string $name, array $s): void
 
 function cut(string $s, int $n): string
 {
-    return strlen($s) <= $n ? $s : substr($s, 0, $n - 1) . '…';
+    return orch_cut($s, $n, '…');
 }

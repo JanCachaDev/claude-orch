@@ -10,7 +10,7 @@ function orch_notify_send(string $text): array
 
     $discord = orch_option('discord_webhook_url');
     if ($discord !== null) {
-        $body = json_encode(['username' => 'orch', 'content' => substr($text, 0, 1900)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $body = json_encode(['username' => 'orch', 'content' => orch_cut($text, 1900)], ORCH_JSON | JSON_PARTIAL_OUTPUT_ON_ERROR);
         [$code, $out] = orch_curl([
             ['fail', null],
             ['url', $discord],
@@ -33,11 +33,11 @@ function orch_notify_send(string $text): array
                 ['user', $key],
                 ['data-urlencode', 'From=whatsapp:' . $from],
                 ['data-urlencode', 'To=whatsapp:' . $phone],
-                ['data-urlencode', 'Body=' . substr($text, 0, 1500)],
+                ['data-urlencode', 'Body=' . orch_cut($text, 1500)],
             ]);
         } else {
             $url = 'https://api.callmebot.com/whatsapp.php?phone=' . rawurlencode($phone)
-                 . '&text=' . rawurlencode(substr($text, 0, 1000)) . '&apikey=' . rawurlencode($key);
+                 . '&text=' . rawurlencode(orch_cut($text, 1000)) . '&apikey=' . rawurlencode($key);
             [$code, $out] = orch_curl([['fail', null], ['url', $url]]);
         }
         $results['whatsapp'] = $code === 0 ? 'ok' : "error $code: " . trim(substr($out, 0, 200));

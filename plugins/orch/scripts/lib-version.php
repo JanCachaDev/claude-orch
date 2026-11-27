@@ -9,6 +9,13 @@ require_once __DIR__ . '/lib-usage.php';
 const ORCH_PLUGIN_ID = 'orch@claude-orch';
 const ORCH_REPO_URL = 'https://github.com/JanCachaDev/claude-orch.git';
 
+/** Repo used for the remote version lookup; the ORCH_REPO_URL env var overrides it (tests, forks). */
+function orch_repo_url(): string
+{
+    $e = getenv('ORCH_REPO_URL');
+    return is_string($e) && $e !== '' ? $e : ORCH_REPO_URL;
+}
+
 /** "X.Y.Z" part of a version string (drops build/hash suffixes), or null when it is not semver-like. */
 function orch_semver(mixed $v): ?string
 {
@@ -53,7 +60,7 @@ function orch_remote_version(int $timeout = 5): ?string
     // Output goes to temp files, not pipes: non-blocking pipe reads don't work on Windows, so polling
     // proc_get_status is the only way to enforce the deadline. No credential prompts (terminal or GUI).
     $cmd = ['git', '-c', 'credential.helper=', '-c', "http.lowSpeedTime=$timeout", '-c', 'http.lowSpeedLimit=1',
-        'ls-remote', '--tags', '--refs', ORCH_REPO_URL];
+        'ls-remote', '--tags', '--refs', orch_repo_url()];
     $env = array_merge(getenv(), ['GIT_TERMINAL_PROMPT' => '0', 'GCM_INTERACTIVE' => 'never', 'GIT_ASKPASS' => '', 'SSH_ASKPASS' => '']);
     $tmp = @tempnam(sys_get_temp_dir(), 'orchv');
     if ($tmp === false) {

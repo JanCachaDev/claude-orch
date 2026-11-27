@@ -33,7 +33,18 @@ const ORCH_DEFAULTS = [
     'contextWarn'   => 150000,
     // also block the first prompt sent to a cold (cache expired) large session until /compact
     'contextBlock'  => false,
+    // IANA timezone for "today" / "this week" and log timestamps (php -n runs in UTC); the TZ env var wins
+    'timezone'      => null,
+    // language of orch's own messages: "auto" (detected from your prompts, Czech or English) | "cs" | "en"
+    'lang'          => 'auto',
+    // model / effort pins per agent and team caps, read by the /orch:* skills through config.php
+    'models'        => [],
+    'efforts'       => [],
+    'team'          => ['planners' => 2, 'workers' => 4, 'reviewers' => 3],
 ];
+
+/** json_encode flags for everything orch writes: readable UTF-8, never fails on a bad byte. */
+const ORCH_JSON = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
 
 /**
  * USD per 1M tokens: [input, output, cache read]. Cache writes are billed at 1.25× (5 min) / 2× (1 h) input.
@@ -160,13 +171,112 @@ function orch_config(string $project): array
     $cfg = ORCH_DEFAULTS;
     $file = "$project/.claude/orch.json";
     if (is_file($file)) {
-        $user = json_decode((string)file_get_contents($file), true);
+        $user = json_decode(orch_strip_bom((string)@file_get_contents($file)), true);
         if (is_array($user)) {
             $cfg = array_merge($cfg, $user);
             $cfg['guard'] = array_merge(ORCH_DEFAULTS['guard'], is_array($user['guard'] ?? null) ? $user['guard'] : []);
+            foreach (['models', 'efforts', 'team'] as $k) { // a wrong type must not break the skills that read these
+                $cfg[$k] = is_array($user[$k] ?? null) ? array_merge(ORCH_DEFAULTS[$k], $user[$k]) : ORCH_DEFAULTS[$k];
+            }
         }
     }
+    orch_tz(is_string($cfg['timezone'] ?? null) ? $cfg['timezone'] : null);
     return $cfg;
+}
+
+function orch_strip_bom(string $s): string
+{
+    return str_starts_with($s, "\xEF\xBB\xBF") ? substr($s, 3) : $s;
+}
+
+/** Why .claude/orch.json is ignored ("Syntax error", "not a JSON object", …), or null when it is absent or fine. */
+function orch_config_error(string $project): ?string
+{
+    $file = "$project/.claude/orch.json";
+    if (!is_file($file)) {
+        return null;
+    }
+    $data = json_decode(orch_strip_bom((string)@file_get_contents($file)), true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return json_last_error_msg();
+    }
+    return is_array($data) ? null : 'not a JSON object';
+}
+
+/**
+ * Sets the default timezone. `php -n` has no php.ini, so PHP would use UTC and "today" / "Monday" would start
+ * at 01:00 or 02:00 local time. Order: TZ env, the `timezone` config key, /etc/timezone or /etc/localtime, UTC.
+ * Returns the zone in use.
+ */
+function orch_tz(?string $configured = null): string
+{
+    static $current = null;
+    if ($configured === null && $current !== null) {
+        return $current;
+    }
+    $candidates = [getenv('TZ') ?: null, $configured];
+    if (DIRECTORY_SEPARATOR === '/') {
+        $candidates[] = trim((string)@file_get_contents('/etc/timezone'));
+        $link = @readlink('/etc/localtime');
+        $candidates[] = is_string($link) && preg_match('~zoneinfo/(.+)$~', $link, $m) ? $m[1] : null;
+    }
+    foreach ($candidates as $tz) {
+        if (is_string($tz) && $tz !== '' && @date_default_timezone_set($tz)) {
+            return $current = $tz;
+        }
+    }
+    date_default_timezone_set('UTC');
+    return $current = 'UTC';
+}
+
+/** UTF-8-safe cut to at most $bytes bytes (never splits a character); $suffix is appended only when something was cut. */
+function orch_cut(string $s, int $bytes, string $suffix = ''): string
+{
+    if (strlen($s) <= $bytes) {
+        return $s;
+    }
+    $n = max(0, $bytes);
+    while ($n > 0 && (ord($s[$n]) & 0xC0) === 0x80) { // byte $n continues a character → step back to its start
+        $n--;
+    }
+    return substr($s, 0, $n) . $suffix;
+}
+
+/** Claude Code's project folder name for a path: every non-alphanumeric character becomes '-'. */
+function orch_slug(string $path): string
+{
+    return preg_replace('/[^A-Za-z0-9]/u', '-', $path) ?? preg_replace('/[^A-Za-z0-9]/', '-', $path);
+}
+
+/** On Windows cmd.exe reads `/` in `vendor/bin/phpunit` as a switch: turn the first word's slashes into backslashes. */
+function orch_win_command(string $cmd, ?bool $windows = null): string
+{
+    $windows ??= DIRECTORY_SEPARATOR === '\\';
+    if ($windows && preg_match('~^(\s*)((?:\.{1,2}/)?[\w.-]+(?:/[\w.-]+)+)(?=\s|$)~', $cmd, $m)) {
+        return $m[1] . str_replace('/', '\\', $m[2]) . substr($cmd, strlen($m[0]));
+    }
+    return $cmd;
+}
+
+/** Keeps the last ~$keep bytes (from a line start) of a log once it grows past $max. Returns true when it trimmed. */
+function orch_cap_log(string $file, int $max = 1048576, int $keep = 524288): bool
+{
+    clearstatcache(true, $file);
+    $size = (int)@filesize($file);
+    if ($size <= $max) {
+        return false;
+    }
+    $fh = @fopen($file, 'r');
+    if (!$fh) {
+        return false;
+    }
+    fseek($fh, $size - $keep);
+    fgets($fh); // drop the partial first line
+    $tail = (string)stream_get_contents($fh);
+    fclose($fh);
+    $ok = @file_put_contents($file, $tail, LOCK_EX) !== false;
+    clearstatcache(true, $file);
+    return $ok;
 }
 
 /** Absolute or relative path -> path relative to project, or null when outside the project. */
@@ -186,7 +296,7 @@ function orch_relative(string $path, string $project): ?string
 
 function orch_append_jsonl(string $file, array $row): void
 {
-    @file_put_contents($file, json_encode($row, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
+    @file_put_contents($file, json_encode($row, ORCH_JSON) . "\n", FILE_APPEND | LOCK_EX);
 }
 
 function orch_read_jsonl(string $file): array
@@ -204,13 +314,31 @@ function orch_read_jsonl(string $file): array
     return $rows;
 }
 
-/** Runs git in the project; returns [exitCode, outputLines]. */
-function orch_git(string $project, string $args): array
+/**
+ * Runs git in the project without a shell (argv array, so no quoting problems on Windows); stderr is merged into stdout.
+ * @param list<string>|string $args argv after `git -C <project>`; a string is split on whitespace (literal words only)
+ * @param array<string,string> $env extra environment variables
+ * @return array{0:int,1:string} [exit code, raw output]
+ */
+function orch_git_raw(string $project, array|string $args, array $env = []): array
 {
-    $out = [];
-    $code = 1;
-    @exec('git -C ' . escapeshellarg($project) . ' ' . $args . ' 2>&1', $out, $code);
-    return [$code, $out];
+    $argv = is_array($args) ? array_values(array_map('strval', $args)) : preg_split('/\s+/', trim($args), -1, PREG_SPLIT_NO_EMPTY);
+    $proc = @proc_open(['git', '-C', $project, ...$argv], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes,
+        null, $env ? array_merge(getenv(), $env) : null);
+    if (!is_resource($proc)) {
+        return [127, ''];
+    }
+    fclose($pipes[0]);
+    $out = (string)stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    return [proc_close($proc), $out];
+}
+
+/** Runs git in the project; returns [exitCode, outputLines]. */
+function orch_git(string $project, array|string $args): array
+{
+    [$code, $out] = orch_git_raw($project, $args);
+    return [$code, $out === '' ? [] : explode("\n", rtrim(str_replace("\r\n", "\n", $out), "\n"))];
 }
 
 function orch_is_git(string $project): bool
@@ -244,3 +372,108 @@ function orch_session_id(array $input): string
 {
     return preg_replace('/[^A-Za-z0-9_-]/', '', (string)($input['session_id'] ?? '')) ?? '';
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Language of orch's own messages (Czech / English). `lang` in .claude/orch.json: "auto" (default) | "cs" | "en".
+// Auto: turn-start.php detects the language of each prompt and keeps it per session in
+// .claude/orch/sessions/<session>.lang; scripts without a prompt use their session's marker, else the newest marker
+// in the project, else Czech.
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * "cs", "en" or null (too short / mixed → the caller keeps the previous language). Cheap: Czech letters and a
+ * few dozen common words per language, no mbstring. Code blocks, inline code and URLs are ignored.
+ */
+function orch_detect_lang(string $text): ?string
+{
+    static $cs = null, $en = null;
+    $cs ??= array_flip(explode(" ", "je jsou jsem jsi jsme jste byl byla bylo bude budou se si na že aby jak jako ale nebo tak tohle tomhle tady tam teď ted "
+        . "není nejde nemám mám máš má mají můžeš muzes můžu můžeme můžete které která který když protože protoze jestli taky také ještě jeste jen pak bez "
+        . "podle prosím prosim ahoj díky diky dík udělej udelej udělat udelat koukni chci chceš chtěl nějak nejak nějaký nejaky oprav přidej pridej zkus "
+        . "ukaž ukaz smaž smaz spusť spust vytvoř vytvor napiš napis změň zmen uprav zkontroluj projdi soubor soubory kód proč proc kde kdy co ano ne jo "
+        . "tento tato toto tuto této těch všechny vsechny mě nám vás nás už uz hlavně hlavne trochu hodně hodne pořád porad"));
+    $en ??= array_flip(explode(" ", "the is are and of in it this that with for you your please can could should would what how why when where which who not be been "
+        . "have has had there here just need want from if but then into also will does did was were let make look using use add show about all any some "
+        . "new only more our their these those they them its than too very because after before each other same work works get give take instead "
+        . "still now out over yes thanks thank hello hi"));
+    $text = orch_cut($text, 4000);
+    $text = preg_replace(["/```.*?```/su", "/`[^`\n]*`/u", "~\b[a-z][a-z0-9+.-]*://\S+~iu"], " ", $text);
+    if (!is_string($text)) { // not valid UTF-8
+        return null;
+    }
+    $text = strtr(strtolower($text), ["Ě" => "ě", "Š" => "š", "Č" => "č", "Ř" => "ř", "Ž" => "ž", "Ť" => "ť", "Ď" => "ď", "Ň" => "ň", "Ů" => "ů",
+        "Á" => "á", "Í" => "í", "É" => "é", "Ý" => "ý", "Ú" => "ú"]);
+    $score = 3 * (int)preg_match_all("/[ěščřžťďňů]/u", $text) + (int)preg_match_all("/[áíéýú]/u", $text);
+    $en_score = 0;
+    if (preg_match_all("/\p{L}+/u", $text, $m)) {
+        foreach ($m[0] as $w) {
+            $score += isset($cs[$w]) ? 2 : 0;
+            $en_score += isset($en[$w]) ? 2 : 0;
+        }
+    }
+    if ($score >= 2 && $score > $en_score) {
+        return "cs";
+    }
+    return $en_score >= 4 && $en_score > $score ? "en" : null;
+}
+
+/** Language marker of a session ("cs" / "en"), else the newest marker in the project, else null. Never creates anything. */
+function orch_lang_marker(string $project, string $session = ""): ?string
+{
+    $dir = "$project/.claude/orch/sessions";
+    $read = function (string $f): ?string {
+        $v = trim((string)@file_get_contents($f));
+        return $v === "cs" || $v === "en" ? $v : null;
+    };
+    $session = preg_replace("/[^A-Za-z0-9_-]/", "", $session) ?? "";
+    if ($session !== "" && ($v = $read("$dir/$session.lang")) !== null) {
+        return $v;
+    }
+    $best = null;
+    $bestTime = -1;
+    foreach (@scandir($dir) ?: [] as $name) {
+        if (str_ends_with($name, ".lang") && ($t = (int)@filemtime("$dir/$name")) > $bestTime && ($v = $read("$dir/$name")) !== null) {
+            $best = $v;
+            $bestTime = $t;
+        }
+    }
+    return $best;
+}
+
+/** Language for this project and session: forced by `lang`, else the session / newest marker, else "cs". Fails soft. */
+function orch_lang_resolve(string $project, string $session = "", ?array $cfg = null): string
+{
+    try {
+        $forced = ($l = ($cfg ?? orch_config($project))["lang"] ?? null) && is_string($l) ? strtolower(trim($l)) : "auto";
+        if ($forced === "cs" || $forced === "en") {
+            return $forced;
+        }
+        return orch_lang_marker($project, $session !== "" ? $session : (string)getenv("CLAUDE_SESSION_ID")) ?? "cs";
+    } catch (Throwable) {
+        return "cs";
+    }
+}
+
+/** Current message language; with $set it is changed first. Not set yet → resolved for the current project. */
+function orch_lang(?string $set = null): string
+{
+    static $cur = null;
+    if ($set !== null) {
+        return $cur = $set === "en" ? "en" : "cs";
+    }
+    return $cur ??= orch_lang_resolve(orch_project_dir());
+}
+
+/** Resolves the language for this project / session and makes it the current one; call once per script. */
+function orch_lang_init(string $project, string $session = "", ?array $cfg = null): string
+{
+    return orch_lang(orch_lang_resolve($project, $session, $cfg));
+}
+
+/** A user-visible message in the current language; with $args both texts are sprintf formats. */
+function orch_t(string $cs, string $en, mixed ...$args): string
+{
+    $s = orch_lang() === "en" ? $en : $cs;
+    return $args ? vsprintf($s, $args) : $s;
+}
+orch_tz(); // timezone from the environment right away; orch_config() refines it with the `timezone` key

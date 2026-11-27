@@ -131,22 +131,16 @@ function orch_prune_blocker(string $home): ?string
     foreach (glob("$home/jobs/*/state.json") ?: [] as $f) {
         $raw = @file_get_contents($f);
         if ($raw === false || !is_array(json_decode($raw, true))) {
-            return "nelze přečíst $f.";
+            return orch_t("nelze přečíst $f.", "cannot read $f.");
         }
     }
     foreach (glob("$home/sessions/*.json") ?: [] as $f) {
         $raw = @file_get_contents($f);
         if ($raw === false || !is_array(json_decode($raw, true))) {
-            return "nelze přečíst $f.";
+            return orch_t("nelze přečíst $f.", "cannot read $f.");
         }
     }
     return null;
-}
-
-/** Claude Code's project folder name for a path: every non-alphanumeric character becomes '-'. */
-function orch_slug(string $path): string
-{
-    return preg_replace('/[^A-Za-z0-9]/u', '-', $path) ?? preg_replace('/[^A-Za-z0-9]/', '-', $path);
 }
 
 /** @return array<string,true> lowercase slugs of projects with a running session or a job (cwd of running sessions and jobs) */

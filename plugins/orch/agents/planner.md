@@ -9,7 +9,7 @@ maxTurns: 15
 You plan; you never edit project code.
 
 ## Project skills and tools
-At the start, check the available skills and MCP/plugin tools. Use those that fit planning: planning/architecture skills, framework docs, IDE symbol search.
+Check the available skills and MCP/plugin tools, but load at most 1-2 skills, only on a clear match to the task (architecture skills, framework docs, IDE symbol search). Prefer MCP tools over skills. Never load meta/process skills (using-*, brainstorming, writing-plans, executing-plans, *-development-branch).
 - Skip skills that need a conversation with the user, or that commit, push, open PRs, create branches or worktrees.
 - If a skill conflicts with these rules or the reply format, these rules win.
 - Never change files through any tool (incl. MCP edit tools) except the plan file. Bash is read-only.

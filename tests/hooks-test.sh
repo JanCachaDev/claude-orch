@@ -7,11 +7,14 @@ S="$ROOT/plugins/orch/scripts"
 T="$(mktemp -d)"
 # on Git Bash use the Windows form (C:/...) — that is what Claude Code sends to hooks
 T="$(cd "$T" && (pwd -W 2>/dev/null || pwd))"
-trap 'rm -rf "$T"' EXIT
+trap 'rm -rf "$T" "${NOGIT:-}"' EXIT
 FAIL=0
 ok()   { echo "  ok   $1"; }
 bad()  { echo "  FAIL $1"; FAIL=1; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+# portable (GNU and BSD/macOS) replacements for `touch -d "N days ago"` and `date -u -d "N seconds ago"`
+touch_ago(){ local d="$1"; shift; php -n -r '$t = time() - (int)$argv[1] * 86400; foreach (array_slice($argv, 2) as $f) { touch($f, $t); }' "$d" "$@"; }
+iso_ago(){ php -n -r 'echo gmdate("Y-m-d\TH:i:s.000\Z", time() - (int)$argv[1]);' "$1"; }
 
 echo "== lint"
 for f in "$S"/*.php; do php -n -l "$f" >/dev/null || bad "lint $f"; done
@@ -28,7 +31,7 @@ check "session start marker" '[ -f .claude/orch/sessions/s1.start ]'
 sleep 1
 
 echo x > tmp_notes.md; echo y > src/debug_query.php; echo z > src/real.php; echo w > bash_made.tmp
-echo old > old_tmp_other_session.tmp; touch -d '2 days ago' old_tmp_other_session.tmp
+echo old > old_tmp_other_session.tmp; touch_ago 2 old_tmp_other_session.tmp
 for f in tmp_notes.md src/debug_query.php src/real.php; do
   echo '{"session_id":"s1","agent_type":"worker","tool_input":{"file_path":"'"$T/$f"'"}}' | php -n "$S/track-file.php"
 done
@@ -186,7 +189,7 @@ echo "== prune"
 mkdir -p "$T/home/projects/p2/old1/subagents" "$T/home/file-history/old1"
 echo '{}' > "$T/home/projects/p2/old1.jsonl"; echo '{}' > "$T/home/projects/p2/old1/subagents/agent-a.jsonl"
 echo '{}' > "$T/home/projects/p2/new1.jsonl"; echo h > "$T/home/file-history/old1/f"
-touch -d "40 days ago" "$T/home/projects/p2/old1.jsonl" "$T/home/projects/p2/old1/subagents/agent-a.jsonl" "$T/home/projects/p2/old1/subagents" "$T/home/projects/p2/old1"
+touch_ago 40 "$T/home/projects/p2/old1.jsonl" "$T/home/projects/p2/old1/subagents/agent-a.jsonl" "$T/home/projects/p2/old1/subagents" "$T/home/projects/p2/old1"
 POUT="$(CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --days=30 --dry-run)"
 check "prune preview lists old"     'grep -q "p2 .* 1 sezení" <<<"$POUT" && [ -f "$T/home/projects/p2/old1.jsonl" ]'
 CLAUDE_CONFIG_DIR="$T/home" php -n "$S/prune.php" --days=30 >/dev/null
@@ -237,13 +240,13 @@ mkprune() { # $1 = home dir
   echo "{\"sessionId\":\"jobold\",\"name\":\"\",\"cwd\":\"x\"}" > "$H/jobs/jb/state.json"
   printf '%s
 ' '{"sessionId":"plainold"}' '{"sessionId":"plainold"}' '{"sessionId":"plainold"}' '{"sessionId":"shortone"}' '{"sessionId":"recent1"}' > "$H/history.jsonl"
-  touch -d "40 days ago" "$P/namedold.jsonl" "$P/jobold.jsonl" "$P/plainold.jsonl"
-  touch -d "2 days ago" "$P/shortone.jsonl" "$P/bigclaudep.jsonl"
+  touch_ago 40 "$P/namedold.jsonl" "$P/jobold.jsonl" "$P/plainold.jsonl"
+  touch_ago 2 "$P/shortone.jsonl" "$P/bigclaudep.jsonl"
   echo '{"type":"user"}' > "$P/live1.jsonl"; mkdir -p "$H/sessions"; echo '{"pid":1,"sessionId":"live1","kind":"interactive"}' > "$H/sessions/1.json"
   echo '{"type":"custom-title","customTitle":"ShortNamed","sessionId":"shortnamed"}' > "$P/shortnamed.jsonl"
   echo '{"type":"user"}' > "$P/resumed.jsonl"; mkdir -p "$H/jobs/jc"; echo '{"sessionId":"x","resumeSessionId":"resumed"}' > "$H/jobs/jc/state.json"
   echo '{"type":"user"}' > "$P/zeroprompt.jsonl"
-  touch -d "2 days ago" "$P/live1.jsonl" "$P/shortnamed.jsonl" "$P/resumed.jsonl" "$P/zeroprompt.jsonl"
+  touch_ago 2 "$P/live1.jsonl" "$P/shortnamed.jsonl" "$P/resumed.jsonl" "$P/zeroprompt.jsonl"
   printf '%s
 ' '{"sessionId":"live1"}' '{"sessionId":"shortnamed"}' '{"sessionId":"resumed"}' >> "$H/history.jsonl"
 }
@@ -275,7 +278,7 @@ echo "== orphaned memory"
 H6="$T/home6"; mkdir -p "$H6/projects"
 for d in onlymem hassess lastgone; do mkdir -p "$H6/projects/$d/memory"; echo m > "$H6/projects/$d/memory/m.md"; done
 echo '{"type":"user"}' > "$H6/projects/hassess/s1.jsonl"
-echo '{"type":"user"}' > "$H6/projects/lastgone/old.jsonl"; touch -d "40 days ago" "$H6/projects/lastgone/old.jsonl"
+echo '{"type":"user"}' > "$H6/projects/lastgone/old.jsonl"; touch_ago 40 "$H6/projects/lastgone/old.jsonl"
 printf '%s
 ' '{"sessionId":"old"}' '{"sessionId":"old"}' '{"sessionId":"old"}' > "$H6/history.jsonl"
 OV="$(CLAUDE_CONFIG_DIR="$H6" php -n "$S/prune.php" --days=30 --dry-run)"
@@ -306,10 +309,10 @@ check "auto is silent"              '[ -z "$AO" ]'
 check "auto honours hook session id" '[ -f "$H4/projects/pp/plainold.jsonl" ] && [ ! -e "$H4/projects/pp/shortone.jsonl" ]'
 check "auto keeps named+job"        '[ -f "$H4/projects/pp/namedold.jsonl" ] && [ -f "$H4/projects/pp/jobold.jsonl" ]'
 check "auto writes log + stamp"     '[ -s "$H4/orch-trash/prune.log" ] && [ -f "$H4/orch-trash/.last-auto" ]'
-touch -d "40 days ago" "$H4/projects/pp/recent1.jsonl"
+touch_ago 40 "$H4/projects/pp/recent1.jsonl"
 echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
 check "auto rate-limited 24h"       '[ -f "$H4/projects/pp/recent1.jsonl" ]'
-touch -d "2 days ago" "$H4/orch-trash/.last-auto"
+touch_ago 2 "$H4/orch-trash/.last-auto"
 echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=0 php -n "$S/prune.php" --auto
 check "auto PRUNE_DAYS=0 is off"    '[ -f "$H4/projects/pp/recent1.jsonl" ]'
 echo '{}' | CLAUDE_CONFIG_DIR="$H4" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=30 php -n "$S/prune.php" --auto
@@ -345,11 +348,11 @@ rm -f "$H5/plugins/installed_plugins.json"; TS5="$(vts v3)"
 check "no installed file → silent"  '[ -z "$TS5" ]'
 VOUT="$(CLAUDE_CONFIG_DIR="$H5" php -n "$S/version.php" --offline)"
 check "no installed → update advice" 'grep -q "nainstalováno: *?" <<<"$VOUT" && grep -q "claude plugin update" <<<"$VOUT"'
-check "remote lookup has timeout"   'start=$(date +%s); php -n -r "require \"$SW/lib-version.php\"; orch_remote_version(1);" >/dev/null; [ $(( $(date +%s) - start )) -le 4 ]'
+check "remote lookup has timeout"   'start=$(date +%s); ORCH_REPO_URL="$T/no-such-repo.git" php -n -r "require \"$SW/lib-version.php\"; orch_remote_version(1);" >/dev/null; [ $(( $(date +%s) - start )) -le 4 ]'
 
 echo "== context warning"
 CP="$T/cp"; mkdir -p "$CP"; CT="$T/ctx.jsonl"
-asst(){ echo "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"$(date -u -d "$1 seconds ago" +%Y-%m-%dT%H:%M:%S.000Z)\",\"message\":{\"id\":\"m$RANDOM\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":$2,\"cache_read_input_tokens\":$3,\"output_tokens\":5,\"cache_creation\":{\"ephemeral_1h_input_tokens\":$2,\"ephemeral_5m_input_tokens\":0}}}}"; }
+asst(){ echo "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"$(iso_ago "$1")\",\"message\":{\"id\":\"m$RANDOM\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":$2,\"cache_read_input_tokens\":$3,\"output_tokens\":5,\"cache_creation\":{\"ephemeral_1h_input_tokens\":$2,\"ephemeral_5m_input_tokens\":0}}}}"; }
 ctxp(){ echo "{\"session_id\":\"$1\",\"transcript_path\":\"$CT\",\"prompt\":\"${2:-hello}\"}" | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$CP" php -n "$S/turn-start.php"; }
 asst 7200 1000 199000 > "$CT"
 C1="$(ctxp c1)"
@@ -387,5 +390,232 @@ check "resume hint has context size" 'grep -q "claude --resume nb (kontext 200.0
 check "stats cold line"              'grep -q "Studená cache" <<<"$(cd "$T" && CLAUDE_CONFIG_DIR="$CH" php -n "$S/stats.php" --days=1 --project="$CP")"'
 check "stats --json cold + avg_ctx"  'CLAUDE_CONFIG_DIR="$CH" php -n "$S/stats.php" --days=1 --project="$CP" --json | grep -q "\"avg_ctx\": 200002"'
 
+# ---------------------------------------------------------------------------------------------------------------
+# v0.6.0: hook smoke test, UTF-8, timezone, storage hygiene, config.php, parallel-collect.php, run-log last/--open
+# ---------------------------------------------------------------------------------------------------------------
+slug(){ php -n -r 'echo preg_replace("/[^A-Za-z0-9]/","-",$argv[1]);' "$1"; }
+gitc(){ git -c user.email=t@t -c user.name=t "$@"; }
+
+echo "== hook smoke (every hooks.json command: exit 0, empty or JSON output)"
+SMK="$T/smoke"; mkdir -p "$SMK"; (cd "$SMK" && git init -q)
+SMOKE="$(php -n -r '$h = json_decode(file_get_contents($argv[1]), true);
+  foreach ($h["hooks"] as $gs) foreach ($gs as $g) foreach ($g["hooks"] as $x) {
+    preg_match("~scripts/([a-z-]+\.php)\"?(.*)$~", $x["command"], $m); echo $m[1], "|", trim($m[2]), "\n"; }' "$ROOT/plugins/orch/hooks/hooks.json")"
+while IFS='|' read -r SCRIPT ARGS; do
+  [ -z "$SCRIPT" ] && continue
+  check "hook script exists: $SCRIPT" '[ -f "$S/$SCRIPT" ]'
+  for INPUT in '' 'garbage{' '{}'; do
+    SOUT="$(printf '%s' "$INPUT" | CLAUDE_CONFIG_DIR="$SMK/home" CLAUDE_PROJECT_DIR="$SMK" CLAUDE_PLUGIN_OPTION_PRUNE_DAYS=0 php -n "$S/$SCRIPT" $ARGS 2>/dev/null)"; SCODE=$?
+    check "smoke $SCRIPT '${INPUT:0:7}' exit 0"  '[ $SCODE -eq 0 ]'
+    check "smoke $SCRIPT '${INPUT:0:7}' output"  '[ -z "$SOUT" ] || printf "%s" "$SOUT" | php -n -r "exit(json_decode(stream_get_contents(STDIN)) !== null ? 0 : 1);"'
+  done
+done <<<"$SMOKE"
+
+echo "== common.php helpers"
+mkdir -p "$T/hlp/.claude"
+echo '{"a":' > "$T/hlp/.claude/orch.json"
+HRES="$(S="$S" HLP="$T/hlp" php -n -r '
+require getenv("S") . "/common.php";
+$t = function (string $n, bool $c) { echo ($c ? "  ok   " : "  FAIL ") . "$n\n"; };
+$t("orch_cut keeps whole characters", orch_cut("čččč", 5) === "čč" && orch_cut("čččč", 4) === "čč" && orch_cut("abc", 5) === "abc");
+$t("orch_cut suffix only when cut", orch_cut("ččč", 4, "…") === "čč…" && orch_cut("ab", 5, "…") === "ab");
+$t("orch_cut result is valid UTF-8", preg_match("//u", orch_cut(str_repeat("ž", 400), 301, "…")) === 1);
+$t("win command: slashes", orch_win_command("vendor/bin/phpunit --colors=never", true) === "vendor\\bin\\phpunit --colors=never");
+$t("win command: php prefix untouched", orch_win_command("php vendor/bin/phpunit", true) === "php vendor/bin/phpunit");
+$t("win command: other os untouched", orch_win_command("vendor/bin/phpunit", false) === "vendor/bin/phpunit");
+$t("win command: plain word untouched", orch_win_command("composer test", true) === "composer test");
+$t("slug", orch_slug("C:/a b/c") === "C--a-b-c");
+$t("config error for broken json", is_string(orch_config_error(getenv("HLP"))));
+$t("config falls back to defaults", orch_config(getenv("HLP"))["team"] === ["planners" => 2, "workers" => 4, "reviewers" => 3]);
+file_put_contents(getenv("HLP") . "/big.log", str_repeat("line of a log file\n", 80000));
+$t("log cap trims", orch_cap_log(getenv("HLP") . "/big.log") && filesize(getenv("HLP") . "/big.log") < 600000);
+$t("log cap starts at a line", str_starts_with(file_get_contents(getenv("HLP") . "/big.log"), "line of a log file\n"));
+$t("log cap ignores small", !orch_cap_log(getenv("HLP") . "/big.log"));
+$t("git argv with spaces", orch_git(getenv("HLP"), ["rev-parse", "--is-inside-work-tree"])[0] !== 127);
+')"
+while read -r MARK REST; do [ "$MARK" = ok ] && ok "$REST" || bad "$REST"; done <<<"$HRES"
+check "TZ env sets timezone"       '[ "$(php -n -r "putenv(\"TZ=Asia/Tokyo\"); require \"$SW/common.php\"; echo date_default_timezone_get();")" = "Asia/Tokyo" ]'
+mkdir -p "$T/tz/.claude"; echo '{"timezone":"Pacific/Auckland"}' > "$T/tz/.claude/orch.json"
+check "timezone config key"        '[ "$(env -u TZ php -n -r "require \"$SW/common.php\"; orch_config(\"$T/tz\"); echo date_default_timezone_get();")" = "Pacific/Auckland" ]'
+
+echo "== invalid orch.json is reported"
+mkdir -p "$T/bad/.claude"; echo '{nope' > "$T/bad/.claude/orch.json"
+BADMSG="$(echo '{"session_id":"b1"}' | CLAUDE_PROJECT_DIR="$T/bad" CLAUDE_CONFIG_DIR="$T/badhome" php -n "$S/session-start.php")"
+check "session-start reports it"   'grep -q "není platný JSON" <<<"$BADMSG"'
+check "config.php: invalid-json"   'php -n "$S/config.php" --project="$T/bad" | grep -q "invalid-json:"'
+check "config.php: defaults kept"  'php -n "$S/config.php" --project="$T/bad" | grep -q "^models={} efforts={} team="'
+
+echo "== config.php"
+NOGIT="$(mktemp -d)"; NOGIT="$(cd "$NOGIT" && (pwd -W 2>/dev/null || pwd))"
+mkdir -p "$T/cfg/.claude"; (cd "$T/cfg" && git init -q && echo a > a && git add a && gitc commit -qm i)
+echo '{"models":{"worker":"haiku"},"efforts":{"reviewer":"high"},"team":{"workers":2},"testCommand":"php t.php"}' > "$T/cfg/.claude/orch.json"
+CFG="$(php -n "$S/config.php" --project="$T/cfg" --git)"
+check "config line: models"        'grep -q "models={\"worker\":\"haiku\"}" <<<"$CFG"'
+check "config line: efforts"       'grep -q "efforts={\"reviewer\":\"high\"}" <<<"$CFG"'
+check "config line: team merged"   'grep -q "team={\"planners\":2,\"workers\":2,\"reviewers\":3}" <<<"$CFG"'
+check "config line: testCommand"   'grep -q "testCommand=\"php t.php\"" <<<"$CFG"'
+check "config line: git dirty+head" 'grep -Eq "git=dirty head=[0-9a-f]{40}" <<<"$CFG"'
+check "config line: git none"      'php -n "$S/config.php" --project="$NOGIT" --git | grep -q "git=none"'
+echo '{}' > "$T/cfg/.claude/orch.json"; (cd "$T/cfg" && git add -A -f && gitc commit -qm j)
+check "config line: git clean"     'php -n "$S/config.php" --project="$T/cfg" --git | grep -q "git=clean head="'
+
+echo "== init writes a portable test command"
+mkdir -p "$T/ini/vendor/bin"; echo x > "$T/ini/vendor/bin/phpunit"
+php -n "$S/init.php" --project="$T/ini" >/dev/null
+check "php vendor/bin/phpunit"     'grep -q "\"testCommand\": \"php vendor/bin/phpunit --colors=never\"" "$T/ini/.claude/orch.json"'
+
+echo "== guard: new rules"
+for C in "git checkout HEAD -- ." "git restore -W ." "git restore --staged --worktree ." "git checkout -f main" "git switch --discard-changes dev" \
+         "Remove-Item * -Recurse -Force" "Remove-Item . -Recurse" \
+         "git checkout -- :/" "git restore :/" "git checkout HEAD -- ':/'" "git restore --worktree :(top)" "git restore -W -- :/." \
+         "git -C /tmp/x reset --hard" "git -c core.x=y clean -fd" "git -C \"my dir\" push --force" "git -C sub -c a=b checkout -- ." "git -C sub stash clear"; do
+  check "blocks: $C"               '! php -n "$S/guard.php" --check="$C" --project="$T" >/dev/null'
+done
+for C in "git restore --staged ." "git checkout main" "git checkout -b feat" "Remove-Item ./build -Recurse" \
+         "git restore --staged :/" "git checkout -- :/src/a.php" "git -C sub status" "git -c core.x=y push --force-with-lease"; do
+  check "allows: $C"               'php -n "$S/guard.php" --check="$C" --project="$T" >/dev/null'
+done
+mkdir -p "$T/gb/.claude"; echo '{"guard":{"enabled":true,"block":["(unclosed"]}}' > "$T/gb/.claude/orch.json"
+for i in 1 2; do echo '{"tool_input":{"command":"ls"}}' | CLAUDE_PROJECT_DIR="$T/gb" php -n "$S/guard.php"; done
+check "invalid regex logged once"  '[ "$(grep -c "invalid guard regex" "$T/gb/.claude/orch/guard.log")" -eq 1 ]'
+check "invalid regex: --check warns" 'php -n "$S/guard.php" --check=ls --project="$T/gb" 2>&1 | grep -q "invalid regex"'
+
+echo "== UTF-8 safety"
+CZ="$(php -n -r 'echo str_repeat("Příliš žluťoučký kůň ", 30);')"
+UP="$T/utf"; mkdir -p "$UP"
+UID1="$(php -n "$S/run-log.php" start --mode=run --session=u1 --project="$UP" --task="$CZ")"
+php -n "$S/run-log.php" end --id="$UID1" --project="$UP" --verdict=APPROVED --summary="$CZ" >/dev/null
+check "runs.log stays valid JSON"  'php -n -r "foreach (file(\"$UP/.claude/orch/runs.log\") as \$l) { if (json_decode(\$l) === null) exit(1); } exit(0);"'
+check "task cut on a character"    'php -n -r "foreach (file(\"$UP/.claude/orch/runs.log\") as \$l) { \$j = json_decode(\$l, true); if (!preg_match(\"//u\", \$j[\"task\"]) || strlen(\$j[\"task\"]) > 303) exit(1); } exit(0);"'
+check "notification payload valid" 'php -n -r "exit(json_decode(file_get_contents(\"$UP/.claude/orch/notify-pending.json\")) !== null ? 0 : 1);"'
+
+echo "== run-log: derived models/skills, --open, last"
+RP="$T/rl"; RH="$T/rlhome"; RS="$(slug "$RP")"; mkdir -p "$RP" "$RH/projects/$RS/s9/subagents"
+RT="$RH/projects/$RS/s9.jsonl"
+mline(){ echo "{\"type\":\"assistant\",\"sessionId\":\"s9\",\"timestamp\":\"$(iso_ago "$1")\",\"message\":{\"id\":\"$2\",\"model\":\"$3\",$4\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}"; }
+mline 300 old1 claude-opus-5-5 '' > "$RT"
+echo '{"agentType":"orch:worker"}' > "$RH/projects/$RS/s9/subagents/agent-a.meta.json"
+echo "plan" > /dev/null
+RID="$(CLAUDE_CONFIG_DIR="$RH" php -n "$S/run-log.php" start --mode=fix --session=s9 --project="$RP" --task="Fix it")"
+check "start stores offsets"       'grep -Eq "\"offsets\":\{\"s9.jsonl\":[1-9]" "$RP/.claude/orch/runs.log"'
+mline 0 new1 claude-opus-5-5 '' >> "$RT"
+mline 0 sub1 claude-sonnet-5-5 '"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}],' > "$RH/projects/$RS/s9/subagents/agent-a.jsonl"
+echo "# plan" > "$RP/.claude/orch/plan.md"
+CLAUDE_CONFIG_DIR="$RH" php -n "$S/run-log.php" end --id="$RID" --project="$RP" --verdict=CHANGES_REQUESTED --rounds=2 --open="rename the helper | add a test" >/dev/null
+RL="$RP/.claude/orch/runs.log"
+check "only the run's calls counted" 'grep "\"event\":\"end\"" "$RL" | grep -q "\"calls\":2"'
+check "models derived per agent"   'grep "\"event\":\"end\"" "$RL" | grep -q "\"models\":{\"worker\":\"sonnet\"}"'
+check "skills derived from subagents" 'grep "\"event\":\"end\"" "$RL" | grep -q "\"skills\":\[\"my-skill\"\]"'
+check "open + plan stored"         'grep "\"event\":\"end\"" "$RL" | grep -q "\"open\":\"rename the helper | add a test\".*\"plan\":\".claude/orch/plan.md\""'
+LAST="$(php -n "$S/run-log.php" last --project="$RP")"
+check "last: text"                 'grep -q "CHANGES_REQUESTED mode=fix" <<<"$LAST" && grep -q "open: rename the helper" <<<"$LAST"'
+check "last --json"                'php -n "$S/run-log.php" last --json --project="$RP" | php -n -r "\$j = json_decode(stream_get_contents(STDIN), true); exit(\$j[\"verdict\"] === \"CHANGES_REQUESTED\" && \$j[\"plan\"] === \".claude/orch/plan.md\" ? 0 : 1);"'
+check "last: no runs → exit 1"     '! php -n "$S/run-log.php" last --project="$T/tz" 2>/dev/null'
+
+echo "== budget: incremental usage cache"
+BP="$T/bp"; BH="$T/bph"; BS="$(slug "$BP")"; mkdir -p "$BP" "$BH/projects/$BS"
+BT="$BH/projects/$BS/b1.jsonl"
+bline(){ echo "{\"type\":\"assistant\",\"sessionId\":\"b1\",\"timestamp\":\"$(iso_ago 30)\",\"message\":{\"id\":\"$1\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":0,\"output_tokens\":1000000,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}"; }
+bline m1 > "$BT"
+V1="$(CLAUDE_CONFIG_DIR="$BH" php -n "$S/budget.php" --project="$BP" --status | awk '/dnes/{print $2}')"
+check "cache file written"         '[ -f "$BP/.claude/orch/usage-cache.json" ]'
+bline m2 >> "$BT"; printf '{"type":"assistant","message":{"id":"half"' >> "$BT"
+V2="$(CLAUDE_CONFIG_DIR="$BH" php -n "$S/budget.php" --project="$BP" --status | awk '/dnes/{print $2}')"
+V3="$(CLAUDE_CONFIG_DIR="$BH" php -n "$S/budget.php" --project="$BP" --status | awk '/dnes/{print $2}')"
+check "new bytes are added"        '[ "$(php -n -r "echo (float)$V2 > (float)$V1 * 1.5 ? 1 : 0;")" = 1 ]'
+check "partial last line ignored"  '[ "$V2" = "$V3" ]'
+
+echo "== stop-tests: unchanged tree is not re-tested"
+STP="$T/stp"; mkdir -p "$STP/.claude"; (cd "$STP" && git init -q && echo a > a.txt && git add a.txt && gitc commit -qm i)
+printf '<?php file_put_contents(%s, "x", FILE_APPEND); exit((int)is_file(%s));' "'$T/stp-count.log'" "'$T/stp-fail'" > "$STP/count.php"
+echo '{"testCommand":"php count.php"}' > "$STP/.claude/orch.json"
+stp(){ echo '{}' | CLAUDE_PROJECT_DIR="$STP" php -n "$S/stop-tests.php" 2>/dev/null; }
+stp; stp
+check "same tree → ran once"       '[ "$(wc -c < "$T/stp-count.log")" -eq 1 ]'
+echo more >> "$STP/a.txt"; stp
+check "changed tree → ran again"   '[ "$(wc -c < "$T/stp-count.log")" -eq 2 ]'
+touch "$T/stp-fail"; echo again >> "$STP/a.txt"; stp; CODE1=$?
+stp; CODE2=$?
+check "failing run is repeated"    '[ "$(wc -c < "$T/stp-count.log")" -eq 4 ] && [ $CODE1 -eq 2 ] && [ $CODE2 -eq 2 ]'
+check "no fingerprint kept when red" '[ ! -f "$STP/.claude/orch/tests.json" ]'
+rm -f "$T/stp-fail"; stp; stp
+check "green again → cached"       '[ "$(wc -c < "$T/stp-count.log")" -eq 5 ]'
+echo jedna > "$STP/příliš žluťoučký.txt"; stp
+echo "delší obsah souboru" > "$STP/příliš žluťoučký.txt"; stp
+check "non-ASCII untracked path fingerprinted" '[ "$(wc -c < "$T/stp-count.log")" -eq 7 ]'
+
+echo "== cleanup hygiene"
+HY="$T/hy"; mkdir -p "$HY/.claude/orch/sessions" "$HY/.claude/worktrees/old1"; (cd "$HY" && git init -q && echo a > a && git add a && gitc commit -qm i)
+HS="$HY/.claude/orch"
+echo p > "$HS/plan-abc.md"; echo p > "$HS/p1.patch"; echo 1 > "$HS/sessions/z.ctxband"; echo 1 > "$HS/sessions/z.ctxcold"; echo p > "$HS/plan.md"
+touch_ago 40 "$HS/plan-abc.md" "$HS/p1.patch" "$HS/sessions/z.ctxband" "$HS/sessions/z.ctxcold" "$HY/.claude/worktrees/old1"
+printf '{"ts":"%s","session":"o","file":"old.tmp"}\n{"ts":"%s","session":"o","file":"new.tmp"}\n' "$(php -n -r 'echo date("c", time() - 40 * 86400);')" "$(php -n -r 'echo date("c");')" > "$HS/files.log"
+php -n -r 'file_put_contents($argv[1], str_repeat("0123456789abcdef\n", 100000)); file_put_contents($argv[2], str_repeat("x", 1100000));' "$HS/guard.log" "$HS/usage-cache.json"
+HOUT="$(php -n "$S/cleanup.php" --manual --project="$HY")"
+check "old plan-*.md removed"      '[ ! -f "$HS/plan-abc.md" ] && [ -f "$HS/plan.md" ]'
+check "old p*.patch removed"       '[ ! -f "$HS/p1.patch" ]'
+check "old ctx markers removed"    '[ ! -f "$HS/sessions/z.ctxband" ] && [ ! -f "$HS/sessions/z.ctxcold" ]'
+check "files.log trimmed"          '! grep -q old.tmp "$HS/files.log" && grep -q new.tmp "$HS/files.log"'
+check "guard.log capped"           '[ "$(wc -c < "$HS/guard.log")" -lt 600000 ]'
+check "huge usage cache dropped"   '[ ! -f "$HS/usage-cache.json" ]'
+check "old worktree is listed"     'grep -q "Starý worktree" <<<"$HOUT" && [ -d "$HY/.claude/worktrees/old1" ]'
+check "tracked tmp kept (batched)" '[ -f tmp_tracked.php ]'
+
+echo "== stats: storage"
+SST="$(CLAUDE_CONFIG_DIR="$RH" php -n "$S/stats.php" --days=1 --project="$HY")"
+check "stats Úložiště line"        'grep -q "^Úložiště: .claude/orch" <<<"$SST"'
+check "stats --json storage"       'CLAUDE_CONFIG_DIR="$RH" php -n "$S/stats.php" --days=1 --project="$HY" --json | grep -q "\"storage\""'
+
+echo "== parallel-collect"
+PC="$T/pc"; mkdir -p "$PC"; (cd "$PC" && git init -q && printf 'one\ntwo\nthree\n' > a.txt && echo keep > k.txt && git add . && gitc commit -qm i)
+PB="$(git -C "$PC" rev-parse HEAD)"
+git -C "$PC" worktree add -q -b worktree-p1 "$PC/wt1" && git -C "$PC" worktree add -q -b worktree-p2 "$PC/wt2" && git -C "$PC" worktree add -q -b worktree-p3 "$PC/wt3"
+printf 'ONE\ntwo\nthree\n' > "$PC/wt1/a.txt"; echo new > "$PC/wt1/n.txt"
+printf 'uno\ntwo\nthree\n' > "$PC/wt2/a.txt"
+echo untouched > "$PC/wt3/k.txt"; git -C "$PC/wt3" checkout -q -- k.txt
+PCOUT="$(php -n "$S/parallel-collect.php" --project="$PC" --base="$PB" --worktrees="P1=$PC/wt1,P2=$PC/wt2,P3=$PC/wt3" 2>/dev/null)"; PCCODE=$?
+check "P1 applied (2 files)"       'grep -q "^P1 applied (2 files)" <<<"$PCOUT"'
+check "P2 conflict is reported"    'grep -q "^P2 failed:" <<<"$PCOUT"'
+check "P3 no changes"              'grep -q "^P3 applied (no changes)" <<<"$PCOUT"'
+check "exit 1 when one failed"     '[ $PCCODE -eq 1 ]'
+check "P1 landed in main tree"     'grep -q ONE "$PC/a.txt" && [ -f "$PC/n.txt" ]'
+check "P2 left the tree untouched" '! grep -q uno "$PC/a.txt"'
+check "applied worktrees removed"  '[ ! -d "$PC/wt1" ] && [ ! -d "$PC/wt3" ] && ! git -C "$PC" branch | grep -q "worktree-p1"'
+check "failed worktree + patch kept" '[ -d "$PC/wt2" ] && [ -s "$PC/.claude/orch/p2.patch" ] && git -C "$PC" branch | grep -q "worktree-p2"'
+check "unknown path refused"       'php -n "$S/parallel-collect.php" --project="$PC" --base="$PB" --worktrees="P9=$T" 2>/dev/null | grep -q "P9 failed: .* not a registered worktree"'
+check "failure says how long the patch is kept" 'grep "^P2 failed:" <<<"$PCOUT" | grep -q "patch ponechán: .claude/orch/p2.patch (úklid ho smaže po 7 dnech), worktree ponechán: "'
+git -C "$PC" worktree add -q -b worktree-p4 "$PC/wt4" "$PB" && printf 'one\ntwo\nTHREE\n' > "$PC/wt4/a.txt"
+PC4="$(php -n "$S/parallel-collect.php" --project="$PC" --base="$PB" --worktrees="P4=$PC/wt4" 2>/dev/null)"
+check "dirty main file → commit or stash first" 'grep -q "^P4 failed: .*commitni nebo stashni: a.txt;" <<<"$PC4" && ! grep -q THREE "$PC/a.txt" && [ -d "$PC/wt4" ]'
+check "dirty check in English"     'echo "{\"lang\":\"en\"}" > "$PC/.claude/orch.json" && php -n "$S/parallel-collect.php" --project="$PC" --base="$PB" --worktrees="P4=$PC/wt4" 2>/dev/null | grep -q "commit or stash them first: a.txt; patch kept: .claude/orch/p4.patch (cleanup deletes it after 7 days)"; R=$?; rm -f "$PC/.claude/orch.json"; [ $R -eq 0 ]'
+
+
+echo "== language (cs/en)"
+LP="$T/lp"; mkdir -p "$LP"
+lpp(){ echo "{\"session_id\":\"$1\",\"transcript_path\":\"$CT\",\"prompt\":\"$2\"}" | CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$LP" php -n "$S/turn-start.php"; }
+asst 7200 1000 199000 > "$CT"; LC="$(lpp l1 'Udělej prosím login pro uživatele')"
+check "Czech prompt → cs message"    'grep -q "cache vypršela" <<<"$LC" && [ "$(cat "$LP/.claude/orch/sessions/l1.lang")" = cs ]'
+asst 7201 1000 199000 > "$CT"; LE="$(lpp l2 'add a new button to the header')"
+check "English prompt → en message"  'grep -q "cache expired (120 min), context 200.0k" <<<"$LE" && grep -q "Next time /compact first" <<<"$LE" && [ "$(cat "$LP/.claude/orch/sessions/l2.lang")" = en ]'
+asst 7400 1000 199000 > "$CT"; LS="$(lpp l2 'ok')"
+check "short prompt keeps language"  'grep -q "cache expired" <<<"$LS" && [ "$(cat "$LP/.claude/orch/sessions/l2.lang")" = en ]'
+asst 7500 1000 199000 > "$CT"; LS2="$(lpp l1 'hello')"
+check "ambiguous prompt keeps cs"    'grep -q "cache vypršela" <<<"$LS2"'
+asst 7600 1000 199000 > "$CT"; LF="$(lpp l1 'Udělej prosím login pro uživatele')"
+echo '{"lang":"en"}' > "$LP/.claude/orch.json"
+asst 7700 1000 199000 > "$CT"; LF="$(lpp l3 'Udělej prosím login pro uživatele')"
+check "lang=en forces en"            'grep -q "cache expired" <<<"$LF"'
+echo '{"lang":"cs"}' > "$LP/.claude/orch.json"
+asst 7800 1000 199000 > "$CT"; LF2="$(lpp l4 'add a new button to the header')"
+check "lang=cs forces cs"            'grep -q "cache vypršela" <<<"$LF2"'
+rm "$LP/.claude/orch.json"
+check "config.php prints lang"       'php -n "$SW/config.php" --project="$LP" | grep -q " lang=\"en\"\$" || [ "$(php -n "$SW/config.php" --project="$LP" --session=l2 | grep -c "lang=\"en\"")" = 1 ]'
+check "config.php --session=l2 → en" 'CLAUDE_PROJECT_DIR="$LP" php -n "$SW/config.php" --project="$LP" --session=l2 | grep -q "lang=\"en\""'
+check "config.php --session=l1 → cs" 'CLAUDE_PROJECT_DIR="$LP" php -n "$SW/config.php" --project="$LP" --session=l1 | grep -q "lang=\"cs\""'
+check "version.php en by session"    'CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$LP" php -n "$SW/version.php" --offline --session=l2 | grep -q "this session:"'
+check "version.php cs by session"    'CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$LP" php -n "$SW/version.php" --offline --session=l1 | grep -q "toto sezení:"'
+check "version.php default cs"       'CLAUDE_CONFIG_DIR="$H5" CLAUDE_PROJECT_DIR="$T/nolang" php -n "$SW/version.php" --offline | grep -q "toto sezení:"'
+check "stats en by session"          'CLAUDE_CONFIG_DIR="$CH" CLAUDE_PROJECT_DIR="$LP" php -n "$S/stats.php" --days=1 --project="$LP" --session=l2 | grep -q "^Storage: .claude/orch"'
+check "orch_detect_lang units"       'php -n -r "require \"$SW/common.php\"; exit(orch_detect_lang(\"Udělej prosím login\") === \"cs\" && orch_detect_lang(\"add a new button to the header\") === \"en\" && orch_detect_lang(\"ok\") === null ? 0 : 1);"'
 echo
 [ $FAIL -eq 0 ] && echo "ALL PASSED" || { echo "SOME TESTS FAILED"; exit 1; }

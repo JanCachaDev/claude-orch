@@ -14,15 +14,16 @@ declare(strict_types=1);
 require __DIR__ . '/lib-usage.php';
 require __DIR__ . '/lib-notify.php';
 
-$opts = getopt('', ['project:', 'status', 'now:']);
+$opts = getopt('', ['project:', 'status', 'now:', 'session:']);
 try {
     $in = isset($opts['project']) ? [] : orch_read_input();
     $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_project_dir($in);
     $cfg = orch_config($project);
-    $b = is_array($cfg['budget'] ?? null) ? $cfg['budget'] : [];
+    orch_lang_init($project, orch_session_id($in) ?: (string)($opts['session'] ?? ''), $cfg);
+    $b =is_array($cfg['budget'] ?? null) ? $cfg['budget'] : [];
     $limits = array_filter([
-        'day'  => limit($b['day'] ?? null, 'budget_day_usd'),
-        'week' => limit($b['week'] ?? null, 'budget_week_usd'),
+        'day'  => orch_budget_limit($b['day'] ?? null, 'budget_day_usd'),
+        'week' => orch_budget_limit($b['week'] ?? null, 'budget_week_usd'),
     ], fn($v) => $v !== null);
     $status = isset($opts['status']);
     if (!$limits && !$status) {
@@ -39,17 +40,19 @@ try {
 
     $dayStart = strtotime('today', $now);
     $weekStart = strtotime('monday this week', $now);
-    $rows = orch_usage_messages($project, min($dayStart, $weekStart));
-    $spend = [
-        'day'  => orch_usage_sum($rows, $cfg['prices'], fn($r) => $r['ts'] >= $dayStart)['usd'],
-        'week' => orch_usage_sum($rows, $cfg['prices'], fn($r) => $r['ts'] >= $weekStart)['usd'],
-    ];
+    // incremental: usage-cache.json keeps per-transcript 15-minute buckets, only newly appended bytes are parsed
+    $spend = ['day' => 0.0, 'week' => 0.0];
+    foreach (orch_usage_buckets($project, "$state/usage-cache.json", min($dayStart, $weekStart)) as $b) {
+        $usd = orch_cost($b['model'], $b['u'], $cfg['prices']) ?? 0.0;
+        $b['ts'] >= $dayStart && $spend['day'] += $usd;
+        $b['ts'] >= $weekStart && $spend['week'] += $usd;
+    }
     $period = ['day' => date('Y-m-d', $now), 'week' => date('o-\WW', $now)];
-    $label = ['day' => 'dnes', 'week' => 'tento týden'];
+    $label = ['day' => orch_t('dnes', 'today'), 'week' => orch_t('tento týden', 'this week')];
 
     if ($status) {
         foreach (['day', 'week'] as $k) {
-            printf("%-11s %8.2f USD%s\n", $label[$k], $spend[$k], isset($limits[$k]) ? sprintf(' / limit %.2f', $limits[$k]) : ' (bez limitu)');
+            printf("%-11s %8.2f USD%s\n", $label[$k], $spend[$k], isset($limits[$k]) ? sprintf(' / limit %.2f', $limits[$k]) : orch_t(' (bez limitu)', ' (no limit)'));
         }
         exit(0);
     }
@@ -59,12 +62,12 @@ try {
     foreach ($limits as $k => $limit) {
         if ($spend[$k] >= $limit && ($mem['alerted'][$k] ?? '') !== $period[$k]) {
             $mem['alerted'][$k] = $period[$k];
-            $alerts[] = sprintf('%s %.2f USD z limitu %.2f USD', $label[$k], $spend[$k], $limit);
+            $alerts[] = orch_t('%s %.2f USD z limitu %.2f USD', '%s %.2f USD of the %.2f USD limit', $label[$k], $spend[$k], $limit);
         }
     }
     @file_put_contents($file, json_encode($mem));
     if ($alerts) {
-        $text = '💸 [' . basename($project) . '] orch: rozpočet překročen — ' . implode('; ', $alerts);
+        $text = '💸 [' . basename($project) . '] ' . orch_t('orch: rozpočet překročen — ', 'orch: budget exceeded — ') . implode('; ', $alerts);
         @file_put_contents("$state/budget-alert.txt", $text);
         if ($cfg['notify']) {
             $results = orch_notify_send($text);
@@ -77,7 +80,7 @@ try {
 }
 exit(0);
 
-function limit($v, string $option): ?float
+function orch_budget_limit($v, string $option): ?float
 {
     $v ??= orch_option($option);
     return is_numeric($v) && (float)$v > 0 ? (float)$v : null;

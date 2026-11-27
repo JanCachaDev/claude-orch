@@ -8,7 +8,8 @@ declare(strict_types=1);
  */
 require __DIR__ . '/lib-version.php';
 
-$opts = getopt('', ['offline', 'json']);
+$opts = getopt('', ['offline', 'json', 'session:']);
+orch_lang_init(orch_project_dir(), (string)($opts['session'] ?? ''));
 $home = orch_claude_home();
 $loaded = orch_loaded_version();
 $installed = orch_installed_version($home);
@@ -24,12 +25,14 @@ foreach ([$market, $installed] as $v) {
 $advice = [];
 $base = $installed ?? $loaded;
 if ($latest !== null && $base !== null && version_compare($latest, $base, '>')) {
-    $advice[] = "Je venku novější verze $latest. Aktualizuj: claude plugin marketplace update claude-orch && claude plugin update orch@claude-orch — pak v běžících sezeních /reload-plugins.";
+    $advice[] = orch_t("Je venku novější verze $latest. Aktualizuj: claude plugin marketplace update claude-orch && claude plugin update orch@claude-orch — pak v běžících sezeních /reload-plugins.",
+        "A newer version $latest is out. Update: claude plugin marketplace update claude-orch && claude plugin update orch@claude-orch — then run /reload-plugins in running sessions.");
 } elseif (orch_reload_needed($loaded, $installed)) {
-    $advice[] = "Toto sezení běží na $loaded, nainstalovaná je $installed: spusť /reload-plugins (nebo sezení zavři a otevři znovu).";
+    $advice[] = orch_t("Toto sezení běží na $loaded, nainstalovaná je $installed: spusť /reload-plugins (nebo sezení zavři a otevři znovu).",
+        "This session is running $loaded, $installed is installed: run /reload-plugins (or close and reopen the session).");
 }
 if (!$advice) {
-    $advice[] = 'Vše aktuální.';
+    $advice[] = orch_t('Vše aktuální.', 'Everything is up to date.');
 }
 
 if (isset($opts['json'])) {
@@ -40,10 +43,11 @@ if (isset($opts['json'])) {
 }
 
 $show = fn(?string $v) => $v ?? '?';
-echo "orch verze\n";
-printf("  toto sezení:    %s\n", $show($loaded));
-printf("  nainstalováno:  %s\n", $show($installed));
-printf("  nejnovější:     %s%s\n", $show($latest), $remote !== null ? ' (GitHub)' : (isset($opts['offline']) ? ' (offline, z marketplace)' : ' (GitHub nedostupný, z marketplace)'));
+echo orch_t("orch verze\n", "orch version\n");
+printf(orch_t("  toto sezení:    %s\n", "  this session:   %s\n"), $show($loaded));
+printf(orch_t("  nainstalováno:  %s\n", "  installed:      %s\n"), $show($installed));
+printf(orch_t("  nejnovější:     %s%s\n", "  latest:         %s%s\n"), $show($latest), $remote !== null ? ' (GitHub)'
+    : (isset($opts['offline']) ? orch_t(' (offline, z marketplace)', ' (offline, from the marketplace)') : orch_t(' (GitHub nedostupný, z marketplace)', ' (GitHub unreachable, from the marketplace)')));
 foreach ($advice as $a) {
     echo "→ $a\n";
 }

@@ -10,8 +10,9 @@ declare(strict_types=1);
  */
 require __DIR__ . '/common.php';
 
-$opts = getopt('', ['list', 'limit:', 'file:', 'batch:', 'force', 'project:']);
+$opts = getopt('', ['list', 'limit:', 'file:', 'batch:', 'force', 'project:', 'session:']);
 $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_project_dir();
+orch_lang_init($project, (string)($opts['session'] ?? ''));
 $state = orch_state_dir($project);
 $force = isset($opts['force']);
 
@@ -28,7 +29,7 @@ foreach (array_reverse(orch_read_jsonl("$state/cleanup.log")) as $row) {
 
 if (isset($opts['list']) || (!isset($opts['file']) && !isset($opts['batch']))) {
     if (!$entries) {
-        echo "Koš je prázdný.\n";
+        echo orch_t("Koš je prázdný.\n", "The trash is empty.\n");
         exit(0);
     }
     foreach (array_slice($entries, 0, max(1, (int)($opts['limit'] ?? 20))) as $e) {
@@ -50,7 +51,7 @@ if (isset($opts['file'])) {
     $todo = array_values(array_filter($entries, fn($e) => $e['trash'] === (string)$opts['batch']));
 }
 if (!$todo) {
-    fwrite(STDERR, "V koši nic takového není. Seznam: --list\n");
+    fwrite(STDERR, orch_t("V koši nic takového není. Seznam: --list\n", "There is nothing like that in the trash. List: --list\n"));
     exit(1);
 }
 
@@ -58,16 +59,16 @@ $code = 0;
 foreach ($todo as $e) {
     $dest = "$project/{$e['file']}";
     if (is_file($dest) && !$force) {
-        echo "! {$e['file']} už existuje (použij --force)\n";
+        echo orch_t("! {$e['file']} už existuje (použij --force)\n", "! {$e['file']} already exists (use --force)\n");
         $code = 1;
         continue;
     }
     @mkdir(dirname($dest), 0777, true);
     if (@rename($e['src'], $dest)) {
-        echo "↩ {$e['file']}  (z {$e['trash']})\n";
+        echo orch_t("↩ {$e['file']}  (z {$e['trash']})\n", "↩ {$e['file']}  (from {$e['trash']})\n");
         orch_append_jsonl("$state/cleanup.log", ['ts' => date('c'), 'restored' => $e['file'], 'trash' => $e['trash']]);
     } else {
-        echo "! {$e['file']}: nepodařilo se přesunout\n";
+        echo orch_t("! {$e['file']}: nepodařilo se přesunout\n", "! {$e['file']}: could not be moved\n");
         $code = 1;
     }
 }

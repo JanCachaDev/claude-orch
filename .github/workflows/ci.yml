@@ -10,7 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        php: ['8.0', '8.2', '8.4']
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -19,12 +20,21 @@ jobs:
       - uses: actions/checkout@v5
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: ${{ matrix.php }}
           coverage: none
+      - name: Git identity (tests create commits)
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
       - name: Validate JSON manifests
         run: |
           for f in .claude-plugin/marketplace.json plugins/orch/.claude-plugin/plugin.json plugins/orch/hooks/hooks.json; do
             php -n -r 'json_decode(file_get_contents($argv[1]), flags: JSON_THROW_ON_ERROR);' "$f" && echo "ok $f"
           done
+      - name: Lint scripts
+        run: |
+          for f in plugins/orch/scripts/*.php tools/*.php; do php -n -l "$f" >/dev/null || exit 1; done
+      - name: Agent level tables in sync
+        run: php -n tools/sync-levels.php --check
       - name: Hook tests
         run: bash tests/hooks-test.sh

@@ -9,11 +9,12 @@ declare(strict_types=1);
  */
 require __DIR__ . '/lib-usage.php';
 
-$opts = getopt('', ['days:', 'top:', 'json']);
+$opts = getopt('', ['days:', 'top:', 'json', 'session:']);
 $days = max(1, (int)($opts['days'] ?? 7));
 $top = max(1, (int)($opts['top'] ?? 12));
 $since = time() - $days * 86400;
 $home = orch_claude_home();
+orch_lang_init(orch_project_dir(), (string)($opts['session'] ?? '')); // machine-wide report: language of the current project
 
 // --- disk: top-level dirs of ~/.claude ---
 $disk = [];
@@ -41,7 +42,8 @@ foreach (glob("$home/projects/*", GLOB_ONLYDIR) ?: [] as $dir) {
         $last = max($last, (int)@filemtime($f));
     }
     $path = project_path($sessions) ?? basename($dir);
-    $rows = orch_usage_messages_dir($dir, $since);
+    $uopts = ['prompts' => true];
+    $rows = orch_usage_messages_dir($dir, $since, $uopts);
     foreach ($rows as &$r) {
         $r['project'] = $path;
     }
@@ -68,19 +70,20 @@ if (isset($opts['json'])) {
         'avg_ctx' => $cold['avg_ctx'],
         'days' => $days, 'home' => $home, 'disk_total' => $total, 'disk' => (object)$disk,
         'projects' => (object)$projects, 'agents' => (object)$byAgent, 'models' => (object)$byModel, 'totals' => $totals,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
+    ], ORCH_JSON | JSON_PRETTY_PRINT | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n";
     exit(0);
 }
 
-echo "orch global — $home — celkem " . orch_fmt_bytes($total) . "\n";
+echo "orch global — $home — " . orch_t('celkem ', 'total ') . orch_fmt_bytes($total) . "\n";
 
 echo "\nDisk (~/.claude)\n";
 foreach (array_slice($disk, 0, 8, true) as $name => $s) {
-    printf("  %-22s %10s %8d souborů\n", "$name/", orch_fmt_bytes($s['bytes']), $s['files']);
+    printf(orch_t("  %-22s %10s %8d souborů\n", "  %-22s %10s %8d files\n"),"$name/", orch_fmt_bytes($s['bytes']), $s['files']);
 }
 
-printf("\nProjekty (%d) — přepisy na disku, tokeny za %d dní\n", count($projects), $days);
-printf("  %-34s %10s %7s %11s %9s %8s %9s\n", 'projekt', 'přepisy', 'sezení', 'naposledy', 'tokeny', 'USD', 'orch/');
+printf(orch_t("\nProjekty (%d) — přepisy na disku, tokeny za %d dní\n", "\nProjects (%d) — transcripts on disk, tokens for %d days\n"), count($projects), $days);
+printf("  %-34s %10s %7s %11s %9s %8s %9s\n", orch_t('projekt', 'project'), orch_t('přepisy', 'transcripts'), orch_t('sezení', 'sessions'),
+    orch_t('naposledy', 'last used'), orch_t('tokeny', 'tokens'), 'USD', 'orch/');
 foreach (array_slice($projects, 0, $top, true) as $path => $p) {
     $u = $p['usage'];
     printf("  %s %9s %6d %11s %9s %8.2f %9s\n", pad(cut(short_path($path), 34), 34), orch_fmt_bytes($p['bytes']), $p['sessions'],
@@ -88,27 +91,28 @@ foreach (array_slice($projects, 0, $top, true) as $path => $p) {
         $p['orch_bytes'] ? orch_fmt_bytes($p['orch_bytes']) : '-');
 }
 if (count($projects) > $top) {
-    echo '  … a ' . (count($projects) - $top) . " dalších (--top=N)\n";
+    echo orch_t('  … a ', '  … and ') . (count($projects) - $top) . orch_t(" dalších (--top=N)\n", " more (--top=N)\n");
 }
 
 if ($allRows) {
-    foreach (['Podle agenta' => $byAgent, 'Podle modelu' => $byModel] as $title => $sums) {
-        printf("\n%-26s %6s %9s %8s %8s\n", "$title ({$days} dní)", 'calls', 'tokeny', 'output', 'USD');
+    foreach ([[orch_t('Podle agenta', 'By agent'), $byAgent], [orch_t('Podle modelu', 'By model'), $byModel]] as [$title, $sums]) {
+        printf("\n%-26s %6s %9s %8s %8s\n", $title . orch_t(" ({$days} dní)", " ({$days} days)"), 'calls', orch_t('tokeny', 'tokens'), 'output', 'USD');
         foreach (array_slice($sums, 0, 10, true) as $name => $s) {
             printf("%-26s %6d %9s %8s %8.2f\n", cut((string)$name, 26), $s['calls'], orch_fmt_tokens(tok($s)), orch_fmt_tokens($s['out']), $s['usd']);
         }
-        printf("%-26s %6d %9s %8s %8.2f\n", 'CELKEM', $totals['calls'], orch_fmt_tokens(tok($totals)), orch_fmt_tokens($totals['out']), $totals['usd']);
+        printf("%-26s %6d %9s %8s %8.2f\n", orch_t('CELKEM', 'TOTAL'), $totals['calls'], orch_fmt_tokens(tok($totals)), orch_fmt_tokens($totals['out']), $totals['usd']);
     }
     echo "\n" . orch_cold_line($cold) . "\n";
-    echo "\nNejdražší tahy ($days dní):\n";
+    echo orch_t("\nNejdražší tahy ($days dní):\n", "\nMost expensive turns ($days days):\n");
     foreach ($topTurns as $t) {
         printf("  %7.2f USD %6d calls %8s  %s  %s  %s\n", $t['usd'], $t['calls'], orch_fmt_duration($t['to'] - $t['from']),
             date('m-d H:i', $t['from']), pad(cut(basename($t['project']), 18), 18), cut_end($t['prompt'], 50));
     }
 } else {
-    echo "\nZa posledních $days dní žádné tokeny.\n";
+    echo orch_t("\nZa posledních $days dní žádné tokeny.\n", "\nNo tokens in the last $days days.\n");
 }
-echo "\nPřepisy starší než cleanupPeriodDays (settings.json, výchozí 30) maže Claude Code sám.\n";
+echo orch_t("\nPřepisy starší než cleanupPeriodDays (settings.json, výchozí 30) maže Claude Code sám.\n",
+    "\nClaude Code deletes transcripts older than cleanupPeriodDays (settings.json, default 30) by itself.\n");
 
 /** Real project path from the "cwd" field of the newest transcript. */
 function project_path(array $sessions): ?string

@@ -17,13 +17,12 @@ function orch_claude_home(): string
 function orch_transcript_dir(string $project): ?string
 {
     $root = orch_claude_home() . '/projects';
-    $native = str_replace('/', DIRECTORY_SEPARATOR === '\\' || preg_match('~^[a-z]:~i', $project) ? '\\' : '/', $project);
-    $slug = preg_replace('/[^A-Za-z0-9]/u', '-', $native) ?? preg_replace('/[^A-Za-z0-9]/', '-', $project);
+    $slug = orch_slug($project);
     if (is_dir("$root/$slug")) {
         return "$root/$slug";
     }
     foreach (glob("$root/*", GLOB_ONLYDIR) ?: [] as $d) {
-        if (strcasecmp(basename($d), (string)$slug) === 0) {
+        if (strcasecmp(basename($d), $slug) === 0) {
             return $d;
         }
     }
@@ -31,25 +30,114 @@ function orch_transcript_dir(string $project): ?string
 }
 
 /**
- * @return list<array{ts:int, session:string, agent:string, model:string, u:array<string,int>}>
+ * Transcript files of one ~/.claude/projects/<slug> directory.
+ * @param string|null $session only this session's main transcript and its subagents
+ * @param bool        $meta    read each subagent's .meta.json for its agentType (false = 'subagent', saves one read per file)
+ * @return array<string,string> file => 'main' | agentType
  */
-function orch_usage_messages(string $project, int $since = 0): array
+function orch_transcript_files(string $dir, ?string $session = null, bool $meta = true): array
+{
+    $files = [];
+    $main = $session === null ? (glob("$dir/*.jsonl") ?: []) : (is_file("$dir/$session.jsonl") ? ["$dir/$session.jsonl"] : []);
+    foreach ($main as $f) {
+        $files[$f] = 'main';
+    }
+    foreach (glob($session === null ? "$dir/*/subagents/agent-*.jsonl" : "$dir/$session/subagents/agent-*.jsonl") ?: [] as $f) {
+        $m = $meta ? json_decode((string)@file_get_contents(substr($f, 0, -6) . '.meta.json'), true) : null;
+        $files[$f] = (string)($m['agentType'] ?? 'subagent');
+    }
+    return $files;
+}
+
+/** Transcript path relative to its project directory (the key used for offsets and the usage cache). */
+function orch_transcript_rel(string $dir, string $file): string
+{
+    return substr($file, strlen($dir) + 1);
+}
+
+/**
+ * Byte offset in a transcript from which everything is at or after $ts: lets `run-log end` skip the (possibly
+ * hundreds of MB) history before a run. A file untouched since $ts counts as fully "before" (its size). The offset is
+ * conservative (never later than the first newer line); a timestamp filter on top does the exact cut.
+ */
+function orch_offset_before(string $file, int $ts): int
+{
+    $size = (int)@filesize($file);
+    if ($size === 0 || (int)@filemtime($file) < $ts) {
+        return $size;
+    }
+    $fh = @fopen($file, 'r');
+    if (!$fh) {
+        return $size;
+    }
+    $start = max(0, $size - 8 * 1048576);
+    fseek($fh, $start);
+    $buf = (string)stream_get_contents($fh);
+    fclose($fh);
+    $lines = explode("\n", $buf);
+    $end = strlen($buf); // position right after the content of line $i
+    for ($i = count($lines) - 1; $i >= 0; $i--) {
+        $len = strlen($lines[$i]);
+        if ($i > 0 || $start === 0) { // the first line of a mid-file window may be partial: ignore it
+            if ($len > 0 && preg_match('/"timestamp":"([^"]+)"/', $lines[$i], $m) && (int)strtotime($m[1]) < $ts - 5) {
+                return min($size, $start + $end + 1);
+            }
+        }
+        $end -= $len + 1;
+    }
+    return $start;
+}
+
+/** Positions $fh at the first complete line at or after $offset (the offset may point into a line). */
+function orch_seek_line($fh, int $offset): void
+{
+    if ($offset <= 0) {
+        fseek($fh, 0);
+        return;
+    }
+    fseek($fh, $offset - 1);
+    if (fgetc($fh) !== "\n") {
+        fgets($fh); // inside a line: skip its rest
+    }
+}
+
+/** Skill names called through the Skill tool on one transcript line. @return list<string> */
+function orch_line_skills(string $line): array
+{
+    $j = json_decode($line, true);
+    $out = [];
+    foreach ((array)($j['message']['content'] ?? []) as $c) {
+        if (is_array($c) && ($c['type'] ?? '') === 'tool_use' && ($c['name'] ?? '') === 'Skill' && is_string($c['input']['skill'] ?? null)) {
+            $out[] = $c['input']['skill'];
+        }
+    }
+    return $out;
+}
+
+/**
+ * @param array $opts in: 'prompts' (bool, collect prompt texts for orch_top_turns), 'session' (only that session's
+ *                    transcripts), 'offsets' (transcript path relative to the project dir => byte offset to start from),
+ *                    'skills' (true = collect subagent Skill calls). out: 'skills' => list of skill names.
+ * @return list<array{ts:int, session:string, agent:string, turn:string, model:string, u:array<string,int>}>
+ */
+function orch_usage_messages(string $project, int $since = 0, array &$opts = []): array
 {
     $dir = orch_transcript_dir($project);
-    return $dir === null ? [] : orch_usage_messages_dir($dir, $since);
+    if ($dir === null) {
+        $opts['skills'] = [];
+        return [];
+    }
+    return orch_usage_messages_dir($dir, $since, $opts);
 }
 
 /** Same as orch_usage_messages(), for one ~/.claude/projects/<slug> directory. */
-function orch_usage_messages_dir(string $dir, int $since = 0): array
+function orch_usage_messages_dir(string $dir, int $since = 0, array &$opts = []): array
 {
-    $files = [];
-    foreach (glob("$dir/*.jsonl") ?: [] as $f) {
-        $files[$f] = 'main';
-    }
-    foreach (glob("$dir/*/subagents/agent-*.jsonl") ?: [] as $f) {
-        $meta = json_decode((string)@file_get_contents(substr($f, 0, -6) . '.meta.json'), true);
-        $files[$f] = (string)($meta['agentType'] ?? 'subagent');
-    }
+    $files = orch_transcript_files($dir, $opts['session'] ?? null);
+    $wantPrompts = !empty($opts['prompts']);
+    $wantSkills = !empty($opts['skills']);
+    $offsets = (array)($opts['offsets'] ?? []);
+    $skills = [];
 
     $seen = [];
     $rows = [];
@@ -61,12 +149,15 @@ function orch_usage_messages_dir(string $dir, int $since = 0): array
         if (!$fh) {
             continue;
         }
+        $offset = (int)($offsets[orch_transcript_rel($dir, $file)] ?? 0);
+        // a file that is now smaller than the saved offset was rewritten → read it from the start again
+        $offset > 0 && $offset <= (int)@filesize($file) ? orch_seek_line($fh, $offset) : fseek($fh, 0);
         $turn = '';
         while (($line = fgets($fh)) !== false) {
             // user lines carry the promptId of the turn they belong to (subagents: the parent turn)
             if (str_contains($line, '"type":"user"') && preg_match('/"promptId":"([^"]+)"/', $line, $pm)) {
                 $turn = $pm[1];
-                if ($agent === 'main' && !isset($GLOBALS['orch_prompts'][$turn]) && !str_contains($line, '"isMeta":true')
+                if ($wantPrompts && $agent === 'main' && !isset($GLOBALS['orch_prompts'][$turn]) && !str_contains($line, '"isMeta":true')
                     && !str_contains($line, '"tool_result"')) {
                     $text = orch_prompt_text(json_decode($line, true)['message']['content'] ?? '');
                     if ($text !== '') {
@@ -74,6 +165,11 @@ function orch_usage_messages_dir(string $dir, int $since = 0): array
                     }
                 }
                 continue;
+            }
+            if ($wantSkills && $agent !== 'main' && str_contains($line, '"name":"Skill"')) {
+                foreach (orch_line_skills($line) as $s) {
+                    $skills[$s] = true;
+                }
             }
             if (!str_contains($line, '"usage"')) {
                 continue;
@@ -108,7 +204,131 @@ function orch_usage_messages_dir(string $dir, int $since = 0): array
         }
         fclose($fh);
     }
+    $opts['skills'] = array_keys($skills);
     return $rows;
+}
+
+const ORCH_BUCKET = 900;
+
+/**
+ * Usage per 15-minute bucket and model, kept incrementally in $cacheFile (state/usage-cache.json): per transcript the
+ * parsed byte offset, size and mtime, the last few message ids (a message can span lines) and the bucket sums. Only
+ * new bytes are parsed on later calls; a file that shrank or whose offset no longer fits is parsed from 0 again.
+ * @return list<array{ts:int, model:string, calls:int, u:array<string,int>}> buckets starting at or after $since
+ */
+function orch_usage_buckets(string $project, string $cacheFile, int $since): array
+{
+    $dir = orch_transcript_dir($project);
+    if ($dir === null) {
+        return [];
+    }
+    $cache = json_decode((string)@file_get_contents($cacheFile), true);
+    $cache = is_array($cache) && ($cache['v'] ?? 0) === 1 && is_array($cache['files'] ?? null) ? $cache : ['v' => 1, 'files' => []];
+    $keepFrom = time() - 15 * 86400;
+    $live = [];
+    $dirty = false;
+    foreach (orch_transcript_files($dir, null, false) as $file => $_agent) {
+        $rel = orch_transcript_rel($dir, $file);
+        $size = (int)@filesize($file);
+        $mtime = (int)@filemtime($file);
+        $c = $cache['files'][$rel] ?? null;
+        if ($c === null && $mtime < $since) {
+            continue; // never parsed and too old to matter
+        }
+        $live[$rel] = true;
+        if ($c !== null && ($c['size'] ?? -1) === $size && ($c['mtime'] ?? -1) === $mtime) {
+            continue;
+        }
+        $off = $c !== null ? (int)($c['off'] ?? 0) : 0;
+        if ($c === null || $off > $size) {
+            $c = ['off' => 0, 'ids' => [], 'b' => []]; // new or shrunk → start over
+            $off = 0;
+        }
+        $fh = @fopen($file, 'r');
+        if (!$fh) {
+            continue;
+        }
+        fseek($fh, $off);
+        $seen = array_fill_keys((array)($c['ids'] ?? []), true);
+        $lastIds = (array)($c['ids'] ?? []);
+        $pos = $off;
+        while (($line = fgets($fh)) !== false) {
+            if (!str_ends_with($line, "\n")) {
+                break; // incomplete last line: parse it next time
+            }
+            $pos += strlen($line);
+            if (!str_contains($line, '"usage"')) {
+                continue;
+            }
+            $j = json_decode($line, true);
+            $m = $j['message'] ?? null;
+            $u = $m['usage'] ?? null;
+            if (!is_array($u) || !isset($m['id']) || isset($seen[$m['id']])) {
+                continue;
+            }
+            $seen[$m['id']] = true;
+            $lastIds[] = (string)$m['id'];
+            $ts = isset($j['timestamp']) ? (int)strtotime((string)$j['timestamp']) : 0;
+            if ($ts < $keepFrom) {
+                continue;
+            }
+            $cw = (int)($u['cache_creation_input_tokens'] ?? 0);
+            $cw1h = (int)($u['cache_creation']['ephemeral_1h_input_tokens'] ?? 0);
+            $b = &$c['b'][intdiv($ts, ORCH_BUCKET) * ORCH_BUCKET][(string)($m['model'] ?? '?')];
+            $b ??= [0, 0, 0, 0, 0, 0]; // calls, in, cw5, cw1h, cread, out
+            $b[0]++;
+            $b[1] += (int)($u['input_tokens'] ?? 0);
+            $b[2] += max(0, $cw - $cw1h);
+            $b[3] += $cw1h;
+            $b[4] += (int)($u['cache_read_input_tokens'] ?? 0);
+            $b[5] += (int)($u['output_tokens'] ?? 0);
+            unset($b);
+        }
+        fclose($fh);
+        $c['off'] = $pos;
+        $c['size'] = $size;
+        $c['mtime'] = $mtime;
+        $c['ids'] = array_slice(array_values(array_unique($lastIds)), -20);
+        $cache['files'][$rel] = $c;
+        $dirty = true;
+    }
+    foreach ($cache['files'] as $rel => &$c) {
+        if (!isset($live[$rel])) {
+            unset($cache['files'][$rel]); // deleted, pruned or too old
+            $dirty = true;
+            continue;
+        }
+        foreach (array_keys($c['b'] ?? []) as $bucket) {
+            if ($bucket < $keepFrom) {
+                unset($c['b'][$bucket]);
+            }
+        }
+    }
+    unset($c);
+    if ($dirty) {
+        $tmp = $cacheFile . '.' . getmypid() . '.tmp';
+        if (@file_put_contents($tmp, json_encode($cache)) !== false && !@rename($tmp, $cacheFile)) {
+            @unlink($tmp);
+        }
+    }
+    $sum = [];
+    foreach ($cache['files'] as $c) {
+        foreach ($c['b'] ?? [] as $bucket => $models) {
+            if ($bucket + ORCH_BUCKET <= $since) {
+                continue;
+            }
+            foreach ($models as $model => $v) {
+                $r = &$sum[$bucket . '|' . $model];
+                $r ??= ['ts' => (int)$bucket, 'model' => (string)$model, 'calls' => 0, 'u' => ['in' => 0, 'cw5' => 0, 'cw1h' => 0, 'cread' => 0, 'out' => 0]];
+                $r['calls'] += $v[0];
+                foreach (['in', 'cw5', 'cw1h', 'cread', 'out'] as $i => $k) {
+                    $r['u'][$k] += $v[$i + 1];
+                }
+                unset($r);
+            }
+        }
+    }
+    return array_values($sum);
 }
 
 /** Sum usage + cost of messages; optional filter callback. */
@@ -147,7 +367,7 @@ function orch_prompt_text($content): string
     }
     $s = preg_replace('~<(system-reminder|local-command-[a-z]+)>.*?</\1>~s', '', $s) ?? $s;
     $s = trim(preg_replace('/\s+/u', ' ', strip_tags($s)) ?? '');
-    return strlen($s) > 200 ? substr($s, 0, 200) : $s;
+    return orch_cut($s, 200);
 }
 
 /**
@@ -220,10 +440,10 @@ const ORCH_CONTEXT_TAIL = 524288;
  * Context size of the main session from the LAST assistant call, read from the final 512 KB of its transcript only
  * (never the whole file). ctx = input + cache write + cache read; ttl = 3600 when the newest cache write used the
  * 1 h cache, else 300. Null when nothing usable is found or when the context was just compacted (the old
- * size no longer applies). Never throws.
+ * size no longer applies; $why is then set to 'compact'). Never throws.
  * @return array{ts:int, ctx:int, ttl:int, model:string}|null
  */
-function orch_last_context(string $transcript): ?array
+function orch_last_context(string $transcript, ?string &$why = null): ?array
 {
     try {
         $fh = @fopen($transcript, 'r');
@@ -246,6 +466,7 @@ function orch_last_context(string $transcript): ?array
         for ($i = count($lines) - 1; $i >= 0; $i--) {
             $line = $lines[$i];
             if ($last === null && (str_contains($line, '"isCompactSummary":true') || str_contains($line, '"subtype":"compact_boundary"'))) {
+                $why = 'compact';
                 return null;
             }
             if (!str_contains($line, '"usage"') || !str_contains($line, '"type":"assistant"') || str_contains($line, '"isSidechain":true')) {
@@ -318,6 +539,7 @@ function orch_cold_summary(array $rows, array $prices, float $totalUsd): array
 
 function orch_cold_line(array $c): string
 {
-    return sprintf('Studená cache: %d tahů přepsalo >=50k, $%.2f (%d %% útraty); průměrný kontext main %s',
+    return orch_t('Studená cache: %d tahů přepsalo >=50k, $%.2f (%d %% útraty); průměrný kontext main %s',
+        'Cold cache: %d turns rewrote >=50k, $%.2f (%d %% of spend); average main context %s',
         $c['count'], $c['usd'], round($c['share']), orch_fmt_tokens($c['avg_ctx']));
 }

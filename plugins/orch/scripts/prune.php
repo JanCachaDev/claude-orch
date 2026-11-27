@@ -17,8 +17,9 @@ declare(strict_types=1);
 require __DIR__ . '/lib-usage.php';
 require __DIR__ . '/lib-sessions.php';
 
-$opts = getopt('', ['days:', 'dry-run', 'keep:', 'restore-last', 'trash-days:', 'auto']);
+$opts = getopt('', ['days:', 'dry-run', 'keep:', 'restore-last', 'trash-days:', 'auto', 'session:']);
 $home = orch_claude_home();
+orch_lang_init(orch_project_dir(), (string)($opts['session'] ?? ''));
 $trashRoot = "$home/orch-trash";
 $now = time();
 
@@ -27,7 +28,7 @@ if (isset($opts['restore-last'])) {
     sort($batches);
     $last = end($batches);
     if (!$last) {
-        echo "Koš je prázdný.\n";
+        echo orch_t("Koš je prázdný.\n", "The trash is empty.\n");
         exit(0);
     }
     $n = 0;
@@ -36,9 +37,9 @@ if (isset($opts['restore-last'])) {
         $n += restore_item($last, $home, $rel, $conflicts);
     }
     remove_empty_dirs($last);
-    echo "Obnoveno $n položek z " . basename($last) . ".\n";
+    echo orch_t("Obnoveno $n položek z ", "Restored $n items from ") . basename($last) . ".\n";
     if (is_dir($last)) {
-        echo "Ponecháno v koši (cíl už existuje, nic nebylo přepsáno nebo smazáno): " . basename($last) . ":\n";
+        echo orch_t('Ponecháno v koši (cíl už existuje, nic nebylo přepsáno nebo smazáno): ', 'Left in the trash (the target already exists, nothing was overwritten or deleted): ') . basename($last) . ":\n";
         foreach ($conflicts as $c) {
             echo "  $c\n";
         }
@@ -78,8 +79,10 @@ if ($auto) {
         ob_start();
         run_prune($home, $trashRoot, $now, $days, false, $keep, 7, $liveSlugs);
         $out = (string)ob_get_clean();
-        if (preg_match('/Přesunuto (\d+)\/(\d+)/', $out, $m) && (int)$m[1] > 0) {
-            @file_put_contents("$trashRoot/prune.log", date('Y-m-d H:i:s', $now) . " auto-prune: $m[1] položek (nepoužito $days+ dní, krátká sezení 1+ den)\n", FILE_APPEND);
+        if (preg_match('/(?:Přesunuto|Moved) (\d+)\/(\d+)/', $out, $m) && (int)$m[1] > 0) {
+            @file_put_contents("$trashRoot/prune.log", date('Y-m-d H:i:s', $now) . orch_t(" auto-prune: $m[1] položek (nepoužito $days+ dní, krátká sezení 1+ den)\n",
+                " auto-prune: $m[1] items (unused $days+ days, short sessions 1+ day)\n"), FILE_APPEND);
+            orch_cap_log("$trashRoot/prune.log", 262144, 131072);
         }
     } catch (Throwable) {
         if (ob_get_level() > 0) {
@@ -90,7 +93,7 @@ if ($auto) {
 }
 
 if (($why = orch_prune_blocker($home)) !== null) {
-    echo "Úklid přerušen, nic nepřesunuto: $why" . "\n";
+    echo orch_t("Úklid přerušen, nic nepřesunuto: $why", "Cleanup aborted, nothing moved: $why") . "\n";
     exit(0);
 }
 run_prune($home, $trashRoot, $now, max(7, (int)($opts['days'] ?? 30)), isset($opts['dry-run']), $keep, (int)($opts['trash-days'] ?? 7), $liveSlugs);
@@ -154,19 +157,19 @@ function run_prune(string $home, string $trashRoot, int $now, int $days, bool $d
         }
     }
 
-    $label = "chráněno: $nProtected (pojmenovaná, úlohy, běžící)\n";
+    $label = orch_t("chráněno: $nProtected (pojmenovaná, úlohy, běžící)\n", "protected: $nProtected (named, jobs, running)\n");
     if (!$moves && !$orphans) {
-        echo "Nic k úklidu: žádné sezení starší než $days dní.\n" . $label;
+        echo orch_t("Nic k úklidu: žádné sezení starší než $days dní.\n", "Nothing to clean up: no session older than $days days.\n") . $label;
     } else {
         uasort($plan, fn($a, $b) => $b['bytes'] <=> $a['bytes']);
         $total = array_sum(array_column($plan, 'bytes'));
-        echo ($dry ? 'Náhled — ' : '') . "sezení nepoužitá $days+ dní (krátká nepojmenovaná 1+ den):\n";
+        echo ($dry ? orch_t('Náhled — ', 'Preview — ') : '') . orch_t("sezení nepoužitá $days+ dní (krátká nepojmenovaná 1+ den):\n", "sessions unused for $days+ days (short unnamed ones 1+ day):\n");
         foreach ($plan as $slug => $p) {
-            printf("  %-50s %3d sezení %10s\n", $slug, $p['sessions'], orch_fmt_bytes($p['bytes']));
+            printf(orch_t("  %-50s %3d sezení %10s\n", "  %-50s %3d sessions %10s\n"), $slug, $p['sessions'], orch_fmt_bytes($p['bytes']));
         }
-        printf("Celkem %d sezení, %s.\n", array_sum(array_column($plan, 'sessions')), orch_fmt_bytes($total));
+        printf(orch_t("Celkem %d sezení, %s.\n", "Total %d sessions, %s.\n"), array_sum(array_column($plan, 'sessions')), orch_fmt_bytes($total));
         foreach ($orphans as $o) {
-            echo "osiřelá paměť: $o\n";
+            echo orch_t("osiřelá paměť: $o\n", "orphaned memory: $o\n");
         }
         echo $label;
         if (!$dry) {
@@ -185,7 +188,7 @@ function run_prune(string $home, string $trashRoot, int $now, int $days, bool $d
                     @rmdir("$home/projects/$o"); // only succeeds when empty
                 }
             }
-            echo "Přesunuto $ok/" . $total . " položek do $batch (vrátíš: prune.php --restore-last).\n";
+            echo orch_t("Přesunuto $ok/" . $total . " položek do $batch (vrátíš: prune.php --restore-last).\n", "Moved $ok/" . $total . " items to $batch (undo: prune.php --restore-last).\n");
         }
     }
 
@@ -199,7 +202,7 @@ function run_prune(string $home, string $trashRoot, int $now, int $days, bool $d
             }
         }
         if ($purged) {
-            echo "Smazáno $purged starých košů (> $keepDays dní).\n";
+            echo orch_t("Smazáno $purged starých košů (> $keepDays dní).\n", "Deleted $purged old trash batches (> $keepDays days).\n");
         }
     }
 }

@@ -4,6 +4,38 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versio
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-27
+
+### Added
+- `/orch:plan`, `/orch:review` and `/orch:fix`, usable by the user and by agents (no `disable-model-invocation`). Each has a delegated mode (Agent tool: `orch:planner`, `orch:reviewer` lenses plus `orch:db-optimizer` with `--db`, `orch:worker`) and an `--inline` mode for subagents, which cannot spawn subagents. Inline review is read-only. `/orch:plan` writes `.claude/orch/plan-<session>.md`; `/orch:review [files | --staged] [--db]` has no worker; `/orch:fix [run id]` takes the OPEN items of the last run, runs one review round and logs with `mode=fix`. Their `allowed-tools` pre-approve only the plugin's own scripts (`php -n "${CLAUDE_PLUGIN_ROOT}/scripts/…`), `git status` and `git diff`; `/orch:fix` proceeds only for a run with OPEN items, and inline it edits only the files those items concern.
+- `/orch:run` and `/orch:backend` accept `--plan=<file>` and skip planning; all four orchestrators accept the inline level overrides `--simple`, `--hard`, `--model=<model>` and `--no-review`. `orch:worker` may call `orch:plan --inline` (no plan, more than 3 files), `orch:review --inline` (prompt says `Self-review: yes`) and `orch:fix --inline <id>` (prompt says "Continue run <id>").
+- `config.php --project=<dir> [--git]`: one line with models, efforts, team, test command and `invalid-json:<error>` (with `--git` also `git=clean|dirty|none head=<sha>`), injected into the orchestration skills so the orchestrator no longer reads `.claude/orch.json`.
+- `run-log.php last [--json] [--session=<id>]` prints the last finished run (id, verdict, mode, task, OPEN items, plan file). `run-log.php end` takes `--open="..."` and derives the models and the used skills from the subagent transcripts (`--models`, `--efforts`, `--skills` stay as optional overrides).
+- `parallel-collect.php --base=<sha> --worktrees=P1=<path>,...` collects `/orch:parallel` workers in one step: diff against the base, a trial `git apply --3way` on a temporary index, the real apply, then worktree and branch removal; one `Pn applied|failed` line each. A failure says that patch and worktree are kept and after how many days (`trashDays`) cleanup deletes the patch; when the main tree already has uncommitted changes in a file the patch touches, it fails early with "commit or stash … first".
+- `tools/levels.md` is the single source of the shared Model/effort and Team block; `tools/sync-levels.php` writes it into every skill between `<!-- orch:levels -->` markers and `--check` fails on drift (also in CI).
+- Config keys: `timezone` (IANA name for "today" and "this week", `TZ` wins, `/orch:init` writes the detected one) and `lang` (`"auto"` | `"cs"` | `"en"`, default `auto`): the language of the messages printed by scripts and hooks. `auto` detects it per session from the user's prompts (Czech diacritics and common Czech words → `cs`, otherwise `en`; falls back to `cs`). Skills and agents already reply in the user's language.
+- Guard rules: `git checkout .` / `git checkout HEAD .`, `git restore` of the whole tree, `git checkout|switch --force` and PowerShell `Remove-Item -Recurse` on the project root. The whole-tree pathspecs `:/`, `:/.` and `:(top)` count like `.`, and the destructive git rules also match with `git -C <dir>` / `git -c k=v` before the subcommand. An invalid user regex in `guard.block` / `guard.allow` is ignored and logged once to `guard.log`.
+- Storage hygiene: cleanup removes old plans (`plan-*.md`), patches (`p*.patch`) and stale session markers, trims `files.log` to `trashDays`, caps the other logs and `usage-cache.json` at about 1 MB, runs `git worktree prune` and (in `/orch:cleanup`) lists leftover worktrees, which it never deletes; `prune.log` is capped. `/orch:stats` prints a `Úložiště:` line.
+- README: "How a run flows", Troubleshooting, Storage, commands usable by agents, the worktree limitation.
+
+### Changed
+- Round-1 fixes go to the same worker via `SendMessage`; a new, stronger worker is used only in round 2 or for CRITICAL security/bug items from a haiku worker. Reviewers get the worker's `VERIFIED` line and rerun tests only when it says "not run" (or for the tests-and-conventions lens). The default reviewer is haiku without effort (the `reviewer` agent no longer pins `effort`). The DB optimizer is skipped when no database code changed and runs on sonnet/low.
+- Agents load at most 1-2 skills, only on a clear match, never meta or process skills; the orchestration skills drop duplicated text and share one level block.
+- Parallel runs use `Self-review: yes`, no full suite in worktrees and one test run after the patches are applied. The plan file is `.claude/orch/plan-<session>.md`. The finish step suggests one conventional commit message.
+- Usage parsing is incremental: `run-log start` stores the transcript sizes, `end` reads only what came after, and `usage-cache.json` (per-file size, mtime and per-day sums) is shared with `budget.php`; a file that shrank is parsed again from 0.
+- The Stop-hook test run is fingerprinted (`state/tests.json`): an unchanged working tree is not tested again after a green run (a red run always reruns on the next Stop). The fingerprint reads `git status --porcelain -z` with `core.quotepath=false`, so non-ASCII and renamed paths count correctly. `hooks.json` has explicit timeouts (10 s, the test run 600 s). `/orch:init` writes `php vendor/bin/phpunit` / `php vendor/bin/pest` so the command also works on Windows.
+- Hook tests smoke-test every hook; CI runs PHP 8.0, 8.2 and 8.4 on Linux, Windows and macOS, lints all scripts and runs `php -n tools/sync-levels.php --check`.
+
+### Fixed
+- Audit bugs: text cut inside multibyte UTF-8 characters (`orch_cut`), time zones (`orch_tz`: "today" no longer starts at 01:00 or 02:00), invalid UTF-8 breaking JSON output (`JSON_INVALID_UTF8_SUBSTITUTE`), shell quoting in git calls (`proc_open` with an argument list), a repeated test run for the same tree in the Stop hook, and a broken `.claude/orch.json` being silently ignored (now reported at session start and in the `Config:` line).
+- The context-band warning is announced again after a compaction.
+
+### Skipped
+- Title cache for sessions (low value).
+- Merging the two process spawns in `stop-tests.php` (the fingerprint rewrite changes that code anyway).
+- `/orch:ui` command.
+- Translating the Czech script output wholesale: `lang` only chooses between the cs and en message sets, and the skills keep replying in the user's language.
+
 ## [0.5.2] - 2026-11-25
 
 ### Added

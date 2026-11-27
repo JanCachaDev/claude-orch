@@ -28,19 +28,20 @@ try {
     $in = $event === 'test' && isset($opts['project']) ? [] : orch_read_input();
     $project = isset($opts['project']) ? orch_norm((string)$opts['project']) : orch_project_dir($in);
     $cfg = orch_config($project);
+    $session = orch_session_id($in);
+    orch_lang_init($project, $session, $cfg);
     if (!$cfg['notify']) {
         exit(0);
     }
     $state = orch_state_dir($project);
-    $session = orch_session_id($in);
     $name = basename($project);
     $text = null;
 
     if ($event === 'notification') {
-        $msg = trim((string)($in['message'] ?? 'Claude čeká na tebe'));
+        $msg = trim((string)($in['message'] ?? orch_t('Claude čeká na tebe', 'Claude is waiting for you')));
         $text = "⏸ [$name] $msg";
     } elseif ($event === 'test') {
-        $text = "🔔 [$name] orch: testovací notifikace funguje.";
+        $text = "🔔 [$name] " . orch_t('orch: testovací notifikace funguje.', 'orch: test notification works.');
     } else { // stop
         $pendingFile = "$state/notify-pending.json";
         $pending = is_file($pendingFile) ? json_decode((string)file_get_contents($pendingFile), true) : null;
@@ -55,10 +56,8 @@ try {
                 if ($elapsed >= $min) {
                     @unlink($turnFile); // one notification per turn
                     $last = trim(preg_replace('/\s+/', ' ', (string)($in['last_assistant_message'] ?? '')) ?? '');
-                    if (strlen($last) > 300) {
-                        $last = substr($last, 0, 300) . '…';
-                    }
-                    $text = "✅ [$name] Claude dokončil (" . orch_fmt_duration($elapsed) . ')' . ($last !== '' ? "\n$last" : '');
+                    $last = orch_cut($last, 300, '…');
+                    $text = "✅ [$name] " . orch_t('Claude dokončil (', 'Claude finished (') . orch_fmt_duration($elapsed) . ')' . ($last !== '' ? "\n$last" : '');
                 }
             }
         }
@@ -72,7 +71,7 @@ try {
         orch_append_jsonl("$state/notify.log", ['ts' => date('c'), 'event' => $event, 'results' => $results]);
     }
     if ($event === 'test' && isset($opts['project'])) {
-        echo $results ? json_encode($results, JSON_UNESCAPED_UNICODE) . "\n" : "Žádný kanál není nastavený (discord_webhook_url / whatsapp_*).\n";
+        echo $results ? json_encode($results, ORCH_JSON | JSON_PARTIAL_OUTPUT_ON_ERROR) . "\n" : orch_t("Žádný kanál není nastavený (discord_webhook_url / whatsapp_*).\n", "No channel is configured (discord_webhook_url / whatsapp_*).\n");
     }
 } catch (Throwable) {
 }
